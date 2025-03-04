@@ -8,35 +8,45 @@ class MonitorGroup(QtWidgets.QGroupBox):
         super().__init__(parent)
         self.setTitle("Monitor")
 
-        vlayout = QtWidgets.QVBoxLayout()
-        glayout = QtWidgets.QGridLayout()
-        flayout = QtWidgets.QFormLayout()
+        hlayout = QtWidgets.QHBoxLayout()
+        glayout_ai1 = QtWidgets.QGridLayout()
+        glayout_ai2 = QtWidgets.QGridLayout()
+        glayout_timer = QtWidgets.QGridLayout()
 
-        for i in range(2):
-            glayout.addWidget(QtWidgets.QLabel(f"AI{i+1}", self), 0, i)
-            ai = QtWidgets.QLabel("", self)
-            setattr(self, f"ai{i+1}", ai)
-            glayout.addWidget(ai, 1, i)
+        self.ai1_label = QtWidgets.QLabel("<h3>AI1, mV</h3>", self)
+        self.ai1 = QtWidgets.QLabel("<h3>N\A</h3>", self)
+        glayout_ai1.addWidget(self.ai1_label, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        glayout_ai1.addWidget(self.ai1, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        self.timer = QtWidgets.QLabel("", self)
-        flayout.addRow("Timer:", self.timer)
-        flayout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
+        self.ai2_label = QtWidgets.QLabel("<h3>AI2, mV</h3>", self)
+        self.ai2 = QtWidgets.QLabel("<h3>N\A</h3>", self)
+        glayout_ai2.addWidget(self.ai2_label, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        glayout_ai2.addWidget(self.ai2, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        vlayout.addLayout(glayout)
-        vlayout.addLayout(flayout)
+        self.timer_label = QtWidgets.QLabel("<h3>Timer, s</h3>", self)
+        self.timer = QtWidgets.QLabel("<h3>N\A</h3>", self)
+        glayout_timer.addWidget(self.timer_label, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
+        glayout_timer.addWidget(self.timer, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        self.setLayout(vlayout)
+        hlayout.addLayout(glayout_ai1)
+        hlayout.addSpacing(10)
+        hlayout.addLayout(glayout_ai2)
+        hlayout.addSpacing(10)
+        hlayout.addLayout(glayout_timer)
+        hlayout.addStretch()
+
+        self.setLayout(hlayout)
 
     def add_data(self, data: List[Dict]):
         for dat in data:
             ai = getattr(self, f"ai{dat['channel']}")
-            ai.setText(f"{dat['voltage']:.5f}")
+            ai.setText(f"<h3>{dat['voltage']:.3f}</h3>")
 
-        self.timer.setText(f"{data[0]['time']:.3f}")
+        self.timer.setText(f"<h3>{data[0]['time']:.3f}</h3>")
 
     def reset_values(self):
         for i in range(1, 3):
             ai = getattr(self, f"ai{i}")
-            ai.setText("")
+            ai.setText("<h3>N\A</h3>")
 
-        self.timer.setText("")
+        self.timer.setText("<h3>N\A</h3>")
