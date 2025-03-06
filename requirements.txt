@@ -6,3 +6,4 @@ PyOpenGL==3.1.5
 Pillow==9.4.0
 pyinstaller==6.10.0
 h5py==3.12.1
+pyserial==3.5

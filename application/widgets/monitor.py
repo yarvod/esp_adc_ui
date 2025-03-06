@@ -29,9 +29,9 @@ class MonitorGroup(QtWidgets.QGroupBox):
         glayout_timer.addWidget(self.timer, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
         hlayout.addLayout(glayout_ai1)
-        hlayout.addSpacing(10)
+        hlayout.addSpacing(20)
         hlayout.addLayout(glayout_ai2)
-        hlayout.addSpacing(10)
+        hlayout.addSpacing(20)
         hlayout.addLayout(glayout_timer)
         hlayout.addStretch()
 

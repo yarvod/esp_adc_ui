@@ -36,7 +36,7 @@ class MeasureThread(QtCore.QThread):
 
     def run(self) -> None:
         try:
-            with EspAdc(host=State.host, port=State.port) as daq:
+            with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
                 self.log.emit({"type": "info", "msg": "Device Connected!"})
 
                 self.create_measure()

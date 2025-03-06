@@ -5,11 +5,13 @@ from PyQt5.QtGui import QIcon
 
 from application.widgets import PlotWidget
 from application.widgets.data_table import DataTable
-from application.widgets.config_group import ConfigGroup
+
+# from application.widgets.config_group import ConfigGroup
 from application.widgets.initialize_group import InitializeGroup
 from application.widgets.log import LogWidget, LogHandler
 from application.widgets.measure_group import MeasureGroup
 from application.widgets.monitor import MonitorGroup
+from store.state import State
 
 
 class MainWidget(QtWidgets.QWidget):
@@ -77,3 +79,7 @@ class App(QtWidgets.QMainWindow):
         self.setWindowIcon(QIcon("assets/daq-logo-small.png"))
         self.setCentralWidget(MainWidget(self))
         self.show()
+
+    def closeEvent(self, event):
+        State.store_state()
+        event.accept()
