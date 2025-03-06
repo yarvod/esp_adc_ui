@@ -1,3 +1,4 @@
-pyinstaller main.py --clean -n DAQ122 --onedir --icon="./assets/daq-logo-small.png" --noconsole -y --add-data="assets:assets" --add-data="daq122.so:." --add-data="libdaq-2.0.0.dll:."
-mkdir .\dist\DAQ122\assets
-copy .\assets\* .\dist\DAQ122\assets
+pyinstaller main.py --clean -n EspAdc --onedir --icon="./assets/volt64.png" --noconsole -y --add-data="assets:assets"
+copy .\settings.ini .\dist\EspAdc\settings.ini
+mkdir .\dist\EspAdc\assets
+copy .\assets\* .\dist\EspAdc\assets
