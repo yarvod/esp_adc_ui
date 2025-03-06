@@ -32,7 +32,7 @@ class PlotWidget(QtWidgets.QWidget):
 
     def prepare_plot(self):
         x_label = "Time, s"
-        y_label = "Voltage, V"
+        y_label = "Voltage, mV"
         self.plot.setBackground("w")
         styles = {"color": "#413C58", "font-size": "15px"}
         self.plot.setLabel("left", y_label, **styles)
