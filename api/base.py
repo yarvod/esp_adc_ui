@@ -79,3 +79,6 @@ class BaseInstrument:
 
     def write(self, cmd: str) -> None:
         return self.adapter.write(cmd)
+
+    def read(self) -> str:
+        return self.adapter.read()

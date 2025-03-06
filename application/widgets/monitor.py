@@ -40,9 +40,9 @@ class MonitorGroup(QtWidgets.QGroupBox):
     def add_data(self, data: List[Dict]):
         for dat in data:
             ai = getattr(self, f"ai{dat['channel']}")
-            ai.setText(f"<h3>{dat['voltage']:.3f}</h3>")
+            ai.setText(f"<h3>{dat['voltage']:.2f}</h3>")
 
-        self.timer.setText(f"<h3>{data[0]['time']:.3f}</h3>")
+        self.timer.setText(f"<h3>{data[0]['time']:.2f}</h3>")
 
     def reset_values(self):
         for i in range(1, 3):
