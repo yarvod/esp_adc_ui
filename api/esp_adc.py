@@ -13,7 +13,10 @@ class EspAdc(BaseInstrument):
     """
 
     def read_data(self) -> Optional[Tuple[float, float]]:
-        response = self.query("adc")
+        try:
+            response = self.query("adc")
+        except UnicodeDecodeError:
+            return None
         reg = re.compile(f"ADC01:\s*([\d.-]+)\s*mV;ADC23:\s*([\d.-]+)\s*mV;")
         try:
             parsed = re.findall(reg, response)[0]

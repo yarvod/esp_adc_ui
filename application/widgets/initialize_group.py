@@ -17,13 +17,7 @@ class InitializeThread(QThread):
     status = pyqtSignal(str)
     log = pyqtSignal(dict)
 
-    def __init__(
-        self,
-        adapter: str,
-        host: str,
-        port: Union[str, int],
-        parent,
-    ):
+    def __init__(self, adapter: str, host: str, port: Union[str, int], parent):
         self.adapter = adapter
         self.host = host
         self.port = port
@@ -32,11 +26,10 @@ class InitializeThread(QThread):
     def run(self):
         try:
             with EspAdc(host=self.host, port=self.port, adapter=self.adapter) as daq:
-                if daq.read_data():
-                    self.status.emit("Success Connected!")
-                    State.adapter = self.adapter
-                    State.host = self.host
-                    State.port = self.port
+                self.status.emit("Success Connected!")
+                State.adapter = self.adapter
+                State.host = self.host
+                State.port = self.port
         except Exception as e:
             self.status.emit(textwrap.shorten(str(e), width=50))
             self.log.emit({"type": "error", "msg": str(e)})
@@ -56,7 +49,7 @@ class InitializeGroup(QtWidgets.QGroupBox):
         self.adapter = QtWidgets.QComboBox(self)
         self.adapter.addItems(ADAPTERS.keys())
         self.adapter.currentTextChanged.connect(self.adapter_changed)
-        self.adapter.setCurrentText(SERIAL)
+        self.adapter.setCurrentText(State.adapter)
 
         self.host = QtWidgets.QLineEdit(self)
         self.host.setText(State.host)
@@ -76,6 +69,7 @@ class InitializeGroup(QtWidgets.QGroupBox):
         layout.addRow(self.btnInitialize)
 
         self.setLayout(layout)
+        self.adapter_changed(State.adapter)
 
     def initialize(self):
         self.thread_initialize = InitializeThread(

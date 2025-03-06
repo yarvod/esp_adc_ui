@@ -18,12 +18,12 @@ class SerialAdapter(AdapterInterface):
         self.serial = serial.Serial(port=port, timeout=timeout)
 
     def _send(self, value: str) -> None:
-        encoded_cmd = ("%s\n" % value).encode("ascii")
+        encoded_cmd = ("%s\n" % value).encode()
         self.serial.write(encoded_cmd)
 
     def _recv(self, byte_num) -> str:
         value = self.serial.read(byte_num)
-        return value.decode("ascii").rstrip("\n\x00")
+        return value.decode().rstrip("\n\x00")
 
     def read(self, num_bytes=1024, **kwargs) -> str:
         return self._recv(num_bytes)
