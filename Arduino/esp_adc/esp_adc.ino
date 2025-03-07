@@ -7,21 +7,55 @@
 #define WIFI_PASSWORD "12345678"
 #define WIFI_CONNECT_TIMEOUT 30000  // 30 секунд
 
-const float multiplier = 0.1875F;
 Adafruit_ADS1115 ads;
-
 WiFiServer wifiServer(80);
 Preferences preferences;
 
-// Функция для обновления чтения adc
+// Variable to store the current gain setting
+// GAIN_TWOTHIRDS = 0 (2/3x gain +/- 6.144V)
+// GAIN_ONE = 1 (1x gain +/- 4.096V)
+// GAIN_TWO = 2 (2x gain +/- 2.048V)
+// GAIN_FOUR = 3 (4x gain +/- 1.024V)
+// GAIN_EIGHT = 4 (8x gain +/- 0.512V)
+// GAIN_SIXTEEN = 5 (16x gain +/- 0.256V)
+adsGain_t currentGain = GAIN_TWOTHIRDS;
+
+// Function to set the gain and update the multiplier
+String setGain(String command) {
+  String gainStr = command.substring(8);
+  int gainValue = gainStr.toInt();
+  adsGain_t gain = static_cast<adsGain_t>(gainValue);
+  ads.setGain(gain);
+  currentGain = gain;
+  return String(gainValue);
+}
+
+adsGain_t getGain() {
+  return ads.getGain();
+}
+
+// Function to get the multiplier based on the current gain setting
+float getMultiplier() {
+  switch (currentGain) {
+    case GAIN_TWOTHIRDS: return 0.1875F;
+    case GAIN_ONE: return 0.125F;
+    case GAIN_TWO: return 0.0625F;
+    case GAIN_FOUR: return 0.03125F;
+    case GAIN_EIGHT: return 0.015625F;
+    case GAIN_SIXTEEN: return 0.0078125F;
+    default: return 0.1875F;
+  }
+}
+
+// Function to read ADC values with the correct multiplier
 String readADC() {
   int16_t adc0_1 = ads.readADC_Differential_0_1();
   int16_t adc2_3 = ads.readADC_Differential_2_3();
+  float multiplier = getMultiplier();
   float volt_01 = multiplier * adc0_1;
   float volt_23 = multiplier * adc2_3;
   String values = "ADC01: " + String(volt_01) + " mV;";
   values += "ADC23: " + String(volt_23) + " mV;";
-
   return values;
 }
 
@@ -52,8 +86,12 @@ String processRequest(String command) {
     return readADC();
   } else if (command == "ip") {
     return getIp();
-  } else if (command.startsWith("wifi")) {
+  } else if (command.startsWith("wifi=")) {
     configureWifi(command);
+  } else if (command.startsWith("setGain=")) {
+    return setGain(command);
+  } else if (command.startsWith("gain")) {
+    return String(getGain());
   }
   return "command not found";
 }
@@ -62,7 +100,7 @@ void setup() {
   // Инициализация последовательного соединения для отладки
   Serial.begin(9600);
 
-  ads.setGain(GAIN_TWOTHIRDS);
+  ads.setGain(currentGain);
   ads.begin();
 
   // Инициализация Preferences
