@@ -169,7 +169,7 @@ String processRequest(String command) {
 }
 
 void setup() {
-  Serial.begin(9600);
+  Serial.begin(115200);
 
   ads.setGain(currentGain);
   ads.begin();
@@ -278,7 +278,7 @@ void dataCollectionTask(void * parameter) {
         Serial.println("Error: Failed to open file for writing");
       }
     }
-    vTaskDelay(100 / portTICK_PERIOD_MS);
+    vTaskDelay(10 / portTICK_PERIOD_MS);
   }
 }
 

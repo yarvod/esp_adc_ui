@@ -15,7 +15,7 @@ class SerialAdapter(AdapterInterface):
     ):
         self.timeout = timeout
         self.delay = delay
-        self.serial = serial.Serial(port=port, timeout=timeout)
+        self.serial = serial.Serial(port=port, timeout=timeout, baudrate=115200)
 
     def _send(self, value: str) -> None:
         encoded_cmd = ("%s\n" % value).encode()
