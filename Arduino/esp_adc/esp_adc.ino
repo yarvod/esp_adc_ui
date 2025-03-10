@@ -16,6 +16,7 @@ Preferences preferences;
 File dataFile;
 String currentFileName = "";
 bool isRecording = false;
+bool isSDInitialized = false;
 
 adsGain_t currentGain = GAIN_TWOTHIRDS;
 
@@ -139,11 +140,30 @@ String processRequest(String command) {
       }
       file.close();
     } else {
-      return "Failed to open directory";
+      return "Error: Failed to open directory";
     }
     return fileList;
   } else if (command == "checkRecording") {
     return checkRecordingStatus();
+  } else if (command == "deinitSD") {
+    if (isSDInitialized) {
+      SD.end();
+      isSDInitialized = false;
+      return "SD card deinitialized. Safe to remove.";
+    } else {
+      return "SD card is already deinitialized.";
+    }
+  } else if (command == "initSD") {
+    if (!isSDInitialized) {
+      if (SD.begin(SD_CS_PIN)) {
+        isSDInitialized = true;
+        return "SD card initialized.";
+      } else {
+        return "Failed to initialize SD card.";
+      }
+    } else {
+      return "SD card is already initialized.";
+    }
   }
   return "command not found";
 }
@@ -188,10 +208,11 @@ void setup() {
     wifiServer.begin();
   }
 
-  if (!SD.begin(SD_CS_PIN)) {
-    Serial.println("SD card initialization failed!");
-  } else {
+  if (SD.begin(SD_CS_PIN)) {
+    isSDInitialized = true;
     Serial.println("SD card initialized.");
+  } else {
+    Serial.println("SD card initialization failed!");
   }
 
   xTaskCreatePinnedToCore(handleSerialCommands, "HandleSerial", 4096, NULL, 1, NULL, 1);
@@ -243,10 +264,9 @@ void handleWiFiCommands(void * parameter) {
   }
 }
 
-
 void dataCollectionTask(void * parameter) {
   while (true) {
-    if (isRecording) {
+    if (isRecording && isSDInitialized) {
       dataFile = SD.open(currentFileName, FILE_APPEND);
       if (dataFile) {
         float* adcData = readADC();
@@ -255,7 +275,7 @@ void dataCollectionTask(void * parameter) {
         dataFile.println(String(buffer));
         dataFile.close();
       } else {
-        Serial.println("Failed to open file for writing");
+        Serial.println("Error: Failed to open file for writing");
       }
     }
     vTaskDelay(100 / portTICK_PERIOD_MS);

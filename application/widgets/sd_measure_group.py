@@ -63,6 +63,27 @@ class CheckStatusThread(QThread):
         self.finished.emit()
 
 
+class InitSdThread(QThread):
+    log = pyqtSignal(dict)
+
+    def __init__(self, parent, init: bool):
+        super().__init__(parent)
+        self.init = init
+
+    def run(self):
+        try:
+            with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
+                if self.init:
+                    response = daq.init_sd()
+                else:
+                    response = daq.deinit_sd()
+                log_type = "error" if "Error" in response else "info"
+                self.log.emit({"type": log_type, "msg": response})
+        except Exception as e:
+            self.log.emit({"type": "error", "msg": str(e)})
+        self.finished.emit()
+
+
 class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
     def __init__(self, parent):
         super().__init__(parent)
@@ -72,6 +93,7 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
 
         flayout_file = QtWidgets.QFormLayout()
         hlayout_buttons = QtWidgets.QHBoxLayout()
+        hlayout_buttons_sd = QtWidgets.QHBoxLayout()
 
         self.file_label = QtWidgets.QLabel("File:", self)
 
@@ -86,13 +108,22 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.btn_check_status = QtWidgets.QPushButton("Check status", self)
         self.btn_check_status.clicked.connect(self.check_status)
 
+        self.btn_init_sd = QtWidgets.QPushButton("Init SD", self)
+        self.btn_init_sd.clicked.connect(lambda: self.init_sd(True))
+
+        self.btn_deinit_sd = QtWidgets.QPushButton("Deinit SD", self)
+        self.btn_deinit_sd.clicked.connect(lambda: self.init_sd(False))
+
         flayout_file.addRow(self.file_label, self.file)
         hlayout_buttons.addWidget(self.btn_start)
         hlayout_buttons.addWidget(self.btn_stop)
         hlayout_buttons.addWidget(self.btn_check_status)
+        hlayout_buttons_sd.addWidget(self.btn_init_sd)
+        hlayout_buttons_sd.addWidget(self.btn_deinit_sd)
 
         layout.addLayout(flayout_file)
         layout.addLayout(hlayout_buttons)
+        layout.addLayout(hlayout_buttons_sd)
         layout.addStretch()
 
         self.setLayout(layout)
@@ -124,3 +155,19 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.thread_check_status.log.connect(self.set_log)
         self.thread_check_status.start()
         self.btn_check_status.setEnabled(False)
+
+    def init_sd(self, init: bool):
+        self.thread_init_sd = InitSdThread(
+            parent=self,
+            init=init,
+        )
+        if init:
+            self.thread_init_sd.finished.connect(lambda: self.btn_init_sd.setEnabled(True))
+        else:
+            self.thread_init_sd.finished.connect(lambda: self.btn_deinit_sd.setEnabled(True))
+        self.thread_init_sd.log.connect(self.set_log)
+        self.thread_init_sd.start()
+        if init:
+            self.btn_init_sd.setEnabled(False)
+        else:
+            self.btn_deinit_sd.setEnabled(False)

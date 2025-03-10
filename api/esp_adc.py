@@ -57,3 +57,9 @@ class EspAdc(BaseInstrument):
 
     def delete_file(self, file: str):
         return self.query(f"delete={file}")
+
+    def init_sd(self):
+        return self.query("initSD")
+
+    def deinit_sd(self):
+        return self.query("deinitSD")
