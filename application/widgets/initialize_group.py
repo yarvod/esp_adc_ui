@@ -46,13 +46,13 @@ class InitializeGroup(QtWidgets.QGroupBox):
 
         layout = QtWidgets.QFormLayout()
 
+        self.host = QtWidgets.QLineEdit(self)
+        self.host.setText(State.host)
+
         self.adapter = QtWidgets.QComboBox(self)
         self.adapter.addItems(ADAPTERS.keys())
         self.adapter.currentTextChanged.connect(self.adapter_changed)
         self.adapter.setCurrentText(State.adapter)
-
-        self.host = QtWidgets.QLineEdit(self)
-        self.host.setText(State.host)
 
         self.port = QtWidgets.QLineEdit(self)
         self.port.setText(f"{State.port}")
@@ -85,10 +85,7 @@ class InitializeGroup(QtWidgets.QGroupBox):
         self.btnInitialize.setEnabled(False)
 
     def adapter_changed(self, text: str):
-        if text == SERIAL:
-            self.host.setEnabled(False)
-        else:
-            self.host.setEnabled(True)
+        self.host.setEnabled(text != SERIAL)
 
     @staticmethod
     def set_log(log: dict):

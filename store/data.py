@@ -104,10 +104,8 @@ class MeasureManager:
                 hdf.attrs["finished"] = finished.strftime("%Y-%m-%d %H:%M:%S")
 
                 data_group = hdf.create_group("data")
-                data_group.attrs["sample_rate"] = measure.data["sample_rate"]
-                # data_group.attrs["voltage"] = measure.data["voltage"]
-                # data_group.attrs["epr"] = measure.data["epr"]
-                # data_group.attrs["is_average"] = measure.data["is_average"]
+                data_group.attrs["rps"] = measure.data["rps"]
+                data_group.create_dataset("time", data=measure.data["time"])
 
                 for key, value in measure.data["data"].items():
                     data_group.create_dataset(f"channel_{key}", data=value)

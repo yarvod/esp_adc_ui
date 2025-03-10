@@ -4,12 +4,12 @@ from PyQt5 import QtWidgets
 from PyQt5.QtGui import QIcon
 
 from application.widgets import PlotWidget
-from application.widgets.data_table import DataTable
+from application.widgets.base_data import BaseData
+from application.widgets.base_init import BaseInit
+from application.widgets.base_measure import BaseMeasure
 
-# from application.widgets.config_group import ConfigGroup
-from application.widgets.initialize_group import InitializeGroup
+from application.widgets.config_group import ConfigGroup
 from application.widgets.log import LogWidget, LogHandler
-from application.widgets.measure_group import MeasureGroup
 from application.widgets.monitor import MonitorGroup
 from store.state import State
 
@@ -31,17 +31,14 @@ class MainWidget(QtWidgets.QWidget):
         self.log_widget = LogWidget(self)
         left_vlayout.addWidget(self.log_widget)
 
-        self.initialize_group = InitializeGroup(self)
-        right_vlayout.addWidget(self.initialize_group)
+        right_vlayout.addWidget(BaseInit(self))
 
-        # self.config_group = ConfigGroup(self)
-        # right_vlayout.addWidget(self.config_group)
+        self.config_group = ConfigGroup(self)
+        right_vlayout.addWidget(self.config_group)
 
-        self.measure_group = MeasureGroup(self)
-        right_vlayout.addWidget(self.measure_group)
+        right_vlayout.addWidget(BaseMeasure(self))
 
-        self.data_table = DataTable(self)
-        right_vlayout.addWidget(self.data_table)
+        right_vlayout.addWidget(BaseData(self))
 
         hlayout.addLayout(left_vlayout)
         hlayout.addLayout(right_vlayout)

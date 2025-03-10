@@ -18,18 +18,20 @@ class MeasureThread(QtCore.QThread):
     data_plot = pyqtSignal(list)
     log = pyqtSignal(dict)
 
-    def __init__(self, parent):
+    def __init__(self, parent, rps: int):
         super().__init__(parent)
         self.store_data = State.store_data
         self.duration = State.duration
         self.measure = None
+        self.rps = rps
 
     def create_measure(self):
         if self.store_data:
             self.measure = MeasureManager.create(
                 data={
-                    "sample_rate": "23",
+                    "rps": self.rps,
                     "data": {channel: [] for channel in range(1, 3)},
+                    "time": [],
                 }
             )
             self.measure.save(finish=False)
@@ -44,7 +46,7 @@ class MeasureThread(QtCore.QThread):
                 start = time.time()
                 while State.is_measuring:
                     data_plot = []
-                    time.sleep(0.2)
+                    time.sleep(1 / self.rps)
                     data = daq.read_data()
                     if data:
                         duration = time.time() - start
@@ -52,6 +54,7 @@ class MeasureThread(QtCore.QThread):
                         if self.store_data and self.measure:
                             self.measure.data["data"][1].append(a0_1)
                             self.measure.data["data"][2].append(a2_3)
+                            self.measure.data["time"].append(duration)
 
                         data_plot.append({"channel": 1, "voltage": a0_1, "time": duration})
                         data_plot.append({"channel": 2, "voltage": a2_3, "time": duration})
@@ -77,7 +80,7 @@ class MeasureGroup(QtWidgets.QGroupBox):
     def __init__(self, parent):
         super().__init__(parent)
         self.thread_measure = None
-        self.setTitle("Measure")
+        self.setTitle("Local Measure")
 
         vlayout = QtWidgets.QVBoxLayout()
         hlayout = QtWidgets.QHBoxLayout()
@@ -94,26 +97,16 @@ class MeasureGroup(QtWidgets.QGroupBox):
         self.is_plot_data.setChecked(State.is_plot_data)
         self.is_plot_data.stateChanged.connect(self.set_is_plot_data)
 
-        self.plot_window_label = QtWidgets.QLabel("Plot points count:", self)
-        self.plot_window_label.setHidden(not State.is_plot_data)
-
         self.plot_window = QtWidgets.QSpinBox(self)
         self.plot_window.setRange(1, 10000)
         self.plot_window.setValue(State.plot_window)
         self.plot_window.valueChanged.connect(self.set_plot_window)
-        self.plot_window.setHidden(not State.is_plot_data)
 
-        # self.read_elements = QtWidgets.QSpinBox(self)
-        # self.read_elements.setRange(1, 10000)
-        # self.read_elements.setValue(State.read_elements_count.value)
-        # self.read_elements.valueChanged.connect(self.set_read_elements)
-        # State.read_elements_count.signal_value.connect(lambda val: self.read_elements.setValue(int(val)))
-
-        # self.is_average = QtWidgets.QCheckBox(self)
-        # self.is_average.setText("Average EpR")
-        # self.is_average.setToolTip("Averaging Elements per Request")
-        # self.is_average.setChecked(State.is_average)
-        # self.is_average.stateChanged.connect(self.set_average)
+        self.rps = QtWidgets.QSpinBox(self)
+        self.rps.setToolTip("Requests per Second")
+        self.rps.setRange(1, 100)
+        self.rps.setValue(State.rps)
+        self.rps.valueChanged.connect(self.set_rps)
 
         self.store_data = QtWidgets.QCheckBox(self)
         self.store_data.setText("Store Data")
@@ -124,11 +117,9 @@ class MeasureGroup(QtWidgets.QGroupBox):
         flayout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         flayout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         flayout.addRow("Measuring Time, s:", self.duration)
-        # flayout.addRow("Elements per Request:", self.read_elements)
-        # flayout.addRow(self.is_average)
+        flayout.addRow("RpS:", self.rps)
+        flayout.addRow(self.is_plot_data, self.plot_window)
         flayout.addRow(self.store_data)
-        flayout.addRow(self.is_plot_data)
-        flayout.addRow(self.plot_window_label, self.plot_window)
 
         self.btn_start = QtWidgets.QPushButton("Start", self)
         self.btn_start.clicked.connect(self.start_measure)
@@ -143,9 +134,9 @@ class MeasureGroup(QtWidgets.QGroupBox):
         self.setLayout(vlayout)
 
     def start_measure(self):
-        self.parent().plot_widget.clear()
-        self.parent().monitor_widget.reset_values()
-        self.thread_measure = MeasureThread(self)
+        self.parent().parent().plot_widget.clear()
+        self.parent().parent().monitor_widget.reset_values()
+        self.thread_measure = MeasureThread(self, rps=self.rps.value())
         self.thread_measure.data_plot.connect(self.plot_data)
         self.thread_measure.log.connect(self.set_log)
         self.btn_start.setEnabled(False)
@@ -168,21 +159,21 @@ class MeasureGroup(QtWidgets.QGroupBox):
 
     def plot_data(self, data: list):
         if self.is_plot_data.isChecked():
-            self.parent().plot_widget.add_plots(data)
-        self.parent().monitor_widget.add_data(data)
+            self.parent().parent().plot_widget.add_plots(data)
+        self.parent().parent().monitor_widget.add_data(data)
 
     @staticmethod
     def set_duration(value):
         State.duration = int(value)
 
+    @staticmethod
+    def set_rps(value):
+        State.rps = int(value)
+
     def set_is_plot_data(self, state):
         if state == QtCore.Qt.CheckState.Checked:
-            self.plot_window.setHidden(False)
-            self.plot_window_label.setHidden(False)
             State.is_plot_data = True
             return
-        self.plot_window.setHidden(True)
-        self.plot_window_label.setHidden(True)
         State.is_plot_data = False
 
     @staticmethod

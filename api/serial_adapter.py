@@ -23,6 +23,7 @@ class SerialAdapter(AdapterInterface):
 
     def _recv(self, byte_num) -> str:
         value = self.serial.read(byte_num)
+        print(f"Recieve: {value}")
         return value.decode().rstrip("\n\x00")
 
     def read(self, num_bytes=1024, **kwargs) -> str:
@@ -35,7 +36,9 @@ class SerialAdapter(AdapterInterface):
         self.write(cmd)
         if self.delay:
             time.sleep(self.delay)
-        return self.read(num_bytes=buffer_size)
+        response = self.read(num_bytes=buffer_size)
+        self.serial.flush()
+        return response
 
     def close(self):
         if self.serial and self.serial.isOpen():
