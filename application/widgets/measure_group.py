@@ -30,7 +30,7 @@ class MeasureThread(QtCore.QThread):
             self.measure = MeasureManager.create(
                 data={
                     "rps": self.rps,
-                    "data": {channel: [] for channel in range(1, 3)},
+                    "data": {channel: [] for channel in range(1, 4)},
                     "time": [],
                 }
             )
@@ -50,14 +50,16 @@ class MeasureThread(QtCore.QThread):
                     data = daq.read_data()
                     if data:
                         duration = time.time() - start
-                        a0_1, a2_3 = data
+                        a0, a1, a2 = data
                         if self.store_data and self.measure:
-                            self.measure.data["data"][1].append(a0_1)
-                            self.measure.data["data"][2].append(a2_3)
+                            self.measure.data["data"][1].append(a0)
+                            self.measure.data["data"][2].append(a1)
+                            self.measure.data["data"][3].append(a2)
                             self.measure.data["time"].append(duration)
 
-                        data_plot.append({"channel": 1, "voltage": a0_1, "time": duration})
-                        data_plot.append({"channel": 2, "voltage": a2_3, "time": duration})
+                        data_plot.append({"channel": 1, "voltage": a0, "time": duration})
+                        data_plot.append({"channel": 2, "voltage": a1, "time": duration})
+                        data_plot.append({"channel": 3, "voltage": a2, "time": duration})
 
                         if duration > self.duration:
                             State.is_measuring = False

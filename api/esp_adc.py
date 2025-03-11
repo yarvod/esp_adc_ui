@@ -13,15 +13,15 @@ class EspAdc(BaseInstrument):
     A class to interface with the ESP ADC data acquisition system.
     """
 
-    def read_data(self) -> Optional[Tuple[float, float]]:
+    def read_data(self) -> Optional[Tuple[float, float, float]]:
         try:
             response = self.query("adc")
         except UnicodeDecodeError:
             return None
-        reg = re.compile(f"ADC01:\s*([\d.-]+)\s*mV;\s*ADC23:\s*([\d.-]+)\s*mV;")
+        reg = re.compile(f"ADC0:\s*([\d.-]+)\s*mV;\s*ADC1:\s*([\d.-]+)\s*mV;\s*ADC2:\s*([\d.-]+)\s*mV;")
         try:
             parsed = re.findall(reg, response)[0]
-            return float(parsed[0]), float(parsed[1])
+            return float(parsed[0]), float(parsed[1]), float(parsed[2])
         except (IndexError, ValueError):
             return None
 

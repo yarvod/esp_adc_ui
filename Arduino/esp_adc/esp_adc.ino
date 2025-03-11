@@ -44,21 +44,24 @@ float getMultiplier() {
 }
 
 float* readADC() {
-  int16_t adc0_1 = ads.readADC_Differential_0_1();
-  int16_t adc2_3 = ads.readADC_Differential_2_3();
+  int16_t adc0 = ads.readADC_SingleEnded(0);
+  int16_t adc1 = ads.readADC_SingleEnded(1);
+  int16_t adc2 = ads.readADC_SingleEnded(2);
   float multiplier = getMultiplier();
-  float volt_01 = multiplier * adc0_1;
-  float volt_23 = multiplier * adc2_3;
-  static float result[2];
-  result[0] = volt_01;
-  result[1] = volt_23;
+  float volt_0 = multiplier * adc0;
+  float volt_1 = multiplier * adc1;
+  float volt_2 = multiplier * adc2;
+  static float result[3];
+  result[0] = volt_0;
+  result[1] = volt_1;
+  result[2] = volt_2;
   return result;
 }
 
 String readADCPretty() {
   float* adcValues = readADC();
   char buffer[64];
-  snprintf(buffer, sizeof(buffer), "ADC01: %.2f mV; ADC23: %.2f mV;", adcValues[0], adcValues[1]);
+  snprintf(buffer, sizeof(buffer), "ADC0: %.2f mV; ADC1: %.2f mV; ADC2: %.2f mV;", adcValues[0], adcValues[1], adcValues[2]);
   return String(buffer);
 }
 
@@ -172,6 +175,7 @@ void setup() {
   Serial.begin(115200);
 
   ads.setGain(currentGain);
+  ads.setDataRate(RATE_ADS1115_860SPS);
   ads.begin();
 
   preferences.begin("wifi-settings", false);
@@ -271,7 +275,7 @@ void dataCollectionTask(void * parameter) {
       if (dataFile) {
         float* adcData = readADC();
         char buffer[64];
-        snprintf(buffer, sizeof(buffer), "%d; %.2f; %.2f", millis(), adcData[0], adcData[1]);
+        snprintf(buffer, sizeof(buffer), "%d; %.2f; %.2f; %.2f", millis(), adcData[0], adcData[1], adcData[2]);
         dataFile.println(String(buffer));
         dataFile.close();
       } else {
