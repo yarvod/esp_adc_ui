@@ -58,6 +58,15 @@ class EspAdc(BaseInstrument):
     def delete_file(self, file: str):
         return self.query(f"delete={file}")
 
+    def download_file(self, file: str):
+        self.write(f"hostFile=/{file}")
+        with open(file, "wb") as file:
+            while True:
+                data = self.adapter.socket.recv(1024)
+                if not data:
+                    return f"File {file} downloaded"
+                file.write(data)
+
     def init_sd(self):
         return self.query("initSD")
 

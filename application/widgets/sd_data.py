@@ -6,6 +6,7 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from api import EspAdc
+from api.constants import SOCKET
 from application.mixins.log_mixin import LogMixin
 from store.state import State
 
@@ -25,6 +26,25 @@ class DeleteThread(QThread):
                 if not self.file.startswith("/"):
                     self.file = "/" + self.file
                 response = daq.delete_file(self.file)
+                log_type = "error" if "Error" in response else "info"
+                self.log.emit({"type": log_type, "msg": response})
+        except Exception as e:
+            self.log.emit({"type": "error", "msg": str(e)})
+        self.finished.emit()
+
+
+class DownloadThread(QThread):
+    log = pyqtSignal(dict)
+
+    def __init__(self, file: str, parent):
+        self.file = file
+        super().__init__(parent)
+
+    def run(self):
+        try:
+            assert State.adapter == SOCKET, "Download use only Socket"
+            with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
+                response = daq.download_file(self.file)
                 log_type = "error" if "Error" in response else "info"
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
@@ -106,7 +126,12 @@ class SdData(QtWidgets.QWidget, LogMixin):
             self.glayout_files.addWidget(btn_delete, i, 2)
 
     def download_file(self, file: str, ind: int):
-        print(f"Download file {file}")
+        self.thread_download = DownloadThread(parent=self, file=file)
+        btn_download = getattr(self, f"btn_download_{ind}")
+        self.thread_download.finished.connect(lambda: btn_download.setEnabled(True))
+        self.thread_download.log.connect(self.set_log)
+        self.thread_download.start()
+        btn_download.setEnabled(False)
 
     def delete_file(self, file: str, ind: int):
         dlg = QtWidgets.QMessageBox(self)

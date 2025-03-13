@@ -9,6 +9,8 @@
 #define WIFI_PASSWORD "12345678"
 #define WIFI_CONNECT_TIMEOUT 30000  // 30 секунд
 #define SD_CS_PIN 5  // Пин для SD-карты
+#define BUFFER_SIZE 860  // Увеличенный размер буфера
+#define CHUNK_SIZE 1024  // Размер чанка для передачи файла
 
 Adafruit_ADS1115 ads;
 WiFiServer wifiServer(80);
@@ -19,6 +21,17 @@ bool isRecording = false;
 bool isSDInitialized = false;
 
 adsGain_t currentGain = GAIN_TWOTHIRDS;
+
+// Буфер для хранения данных
+struct DataPoint {
+  unsigned long timestamp;
+  float adc0;
+  float adc1;
+  float adc2;
+};
+
+DataPoint buffer[BUFFER_SIZE];
+int bufferIndex = 0;
 
 adsGain_t setGain(int gainValue) {
   adsGain_t gain = static_cast<adsGain_t>(gainValue);
@@ -43,23 +56,19 @@ float getMultiplier() {
   }
 }
 
-float* readADC() {
+void readADC(float* result) {
   int16_t adc0 = ads.readADC_SingleEnded(0);
   int16_t adc1 = ads.readADC_SingleEnded(1);
   int16_t adc2 = ads.readADC_SingleEnded(2);
   float multiplier = getMultiplier();
-  float volt_0 = multiplier * adc0;
-  float volt_1 = multiplier * adc1;
-  float volt_2 = multiplier * adc2;
-  static float result[3];
-  result[0] = volt_0;
-  result[1] = volt_1;
-  result[2] = volt_2;
-  return result;
+  result[0] = multiplier * adc0;
+  result[1] = multiplier * adc1;
+  result[2] = multiplier * adc2;
 }
 
 String readADCPretty() {
-  float* adcValues = readADC();
+  float adcValues[3];
+  readADC(adcValues);
   char buffer[64];
   snprintf(buffer, sizeof(buffer), "ADC0: %.2f mV; ADC1: %.2f mV; ADC2: %.2f mV;", adcValues[0], adcValues[1], adcValues[2]);
   return String(buffer);
@@ -118,9 +127,7 @@ String processRequest(String command) {
     return "Recording started in " + currentFileName;
   } else if (command == "stop") {
     isRecording = false;
-    if (dataFile) {
-      dataFile.close();
-    }
+    flushBufferToSD();
     String response = "Recording stopped in " + currentFileName;
     currentFileName = "";
     return response;
@@ -169,6 +176,23 @@ String processRequest(String command) {
     }
   }
   return "command not found";
+}
+
+void flushBufferToSD() {
+  if (bufferIndex > 0 && isSDInitialized) {
+    dataFile = SD.open(currentFileName, FILE_APPEND);
+    if (dataFile) {
+      for (int i = 0; i < bufferIndex; i++) {
+        char bufferLine[64];
+        snprintf(bufferLine, sizeof(bufferLine), "%lu; %.2f; %.2f; %.2f", buffer[i].timestamp, buffer[i].adc0, buffer[i].adc1, buffer[i].adc2);
+        dataFile.println(bufferLine);
+      }
+      dataFile.close();
+      bufferIndex = 0; // Сброс индекса буфера
+    } else {
+      Serial.println("Error: Failed to open file for writing");
+    }
+  }
 }
 
 void setup() {
@@ -251,11 +275,14 @@ void handleWiFiCommands(void * parameter) {
 
             request.replace("\r", "");
             request.replace("\n", "");
-            Serial.println("Process request");
-            String response = processRequest(request);
-            client.println(response);
-            Serial.print("Response: ");
-            Serial.println(response);
+
+            if (request.startsWith("hostFile=")) {
+              String fileName = request.substring(9);
+              hostFile(client, fileName);
+            } else {
+              String response = processRequest(request);
+              client.println(response);
+            }
           }
           vTaskDelay(10 / portTICK_PERIOD_MS);
         }
@@ -271,55 +298,40 @@ void handleWiFiCommands(void * parameter) {
 void dataCollectionTask(void * parameter) {
   while (true) {
     if (isRecording && isSDInitialized) {
-      dataFile = SD.open(currentFileName, FILE_APPEND);
-      if (dataFile) {
-        float* adcData = readADC();
-        char buffer[64];
-        snprintf(buffer, sizeof(buffer), "%d; %.2f; %.2f; %.2f", millis(), adcData[0], adcData[1], adcData[2]);
-        dataFile.println(String(buffer));
-        dataFile.close();
-      } else {
-        Serial.println("Error: Failed to open file for writing");
+      float adcData[3];
+      readADC(adcData);
+      buffer[bufferIndex].timestamp = millis();
+      buffer[bufferIndex].adc0 = adcData[0];
+      buffer[bufferIndex].adc1 = adcData[1];
+      buffer[bufferIndex].adc2 = adcData[2];
+      bufferIndex++;
+
+      if (bufferIndex >= BUFFER_SIZE) {
+        flushBufferToSD();
       }
     }
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    vTaskDelay(pdMS_TO_TICKS(1)); // Задержка в 1 миллисекунду
   }
 }
 
-void hostFile(WiFiClient client) {
-  String request = client.readStringUntil('\r');
-  int addr_start = request.indexOf('/') + 1;
-  int addr_end = request.indexOf(' ', addr_start);
-  String fileName = request.substring(addr_start, addr_end);
-
+void hostFile(WiFiClient client, String fileName) {
   if (SD.exists(fileName)) {
-    File file = SD.open(fileName, FILE_READ);
+    File file = SD.open(fileName);
     if (file) {
-      Serial.println("File is exists; Send headers");
-      client.println("HTTP/1.1 200 OK");
-      client.println("Content-Type: application/octet-stream");
-      client.println("Content-Disposition: attachment; filename=\"" + fileName + "\"");
-      client.println("Connection: close");
-      client.println();
-
-      // Чтение и отправка файла по частям
-      const size_t bufferSize = 128;
-      char buffer[bufferSize];
+      uint8_t buffer[CHUNK_SIZE];
       size_t bytesRead;
-
-      while ((bytesRead = file.readBytes(buffer, bufferSize)) > 0) {
-        Serial.println("Send 128 bytest");
+      while ((bytesRead = file.read(buffer, CHUNK_SIZE)) > 0) {
+        Serial.println("Sent chunk");
         client.write(buffer, bytesRead);
+        vTaskDelay(pdMS_TO_TICKS(1)); // Short delay to avoid overwhelming the client
       }
-      Serial.println("All bytest sent; closing file");
       file.close();
-      Serial.println("File is closed");
+      client.stop();
+      Serial.println("File sent successfully");
     } else {
-      Serial.println("File not found "+ fileName);
-      client.println("HTTP/1.1 404 Not Found");
-      client.println("Connection: close");
-      client.println();
+      client.println("Error: Failed to open file");
     }
-    client.stop();
+  } else {
+    client.println("Error: File not found");
   }
 }
