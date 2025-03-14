@@ -24,7 +24,7 @@ class MonitorGroup(QtWidgets.QGroupBox):
         glayout_ai2.addWidget(self.ai2_label, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         glayout_ai2.addWidget(self.ai2, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
 
-        self.ai3_label = QtWidgets.QLabel("<h3>AI2, mV</h3>", self)
+        self.ai3_label = QtWidgets.QLabel("<h3>AI3, mV</h3>", self)
         self.ai3 = QtWidgets.QLabel("<h3>N\A</h3>", self)
         glayout_ai3.addWidget(self.ai3_label, 0, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
         glayout_ai3.addWidget(self.ai3, 1, 0, alignment=QtCore.Qt.AlignmentFlag.AlignCenter)
