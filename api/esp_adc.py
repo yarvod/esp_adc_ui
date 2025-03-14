@@ -62,7 +62,7 @@ class EspAdc(BaseInstrument):
         self.write(f"hostFile=/{file}")
         with open(file, "wb") as file:
             while True:
-                data = self.adapter.socket.recv(1024)
+                data = self.adapter.socket.recv(32768)
                 if not data:
                     return f"File {file} downloaded"
                 file.write(data)
