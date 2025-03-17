@@ -10,7 +10,7 @@
 #define WIFI_CONNECT_TIMEOUT 30000  // 30 секунд
 #define SD_CS_PIN 5  // Пин для SD-карты
 #define BUFFER_SIZE 860  // Увеличенный размер буфера
-#define CHUNK_SIZE 2048  // Размер чанка для передачи файла
+#define CHUNK_SIZE 1024  // Размер чанка для передачи файла
 
 Adafruit_ADS1115 ads;
 WiFiServer wifiServer(80);
