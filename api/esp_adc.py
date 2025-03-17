@@ -43,6 +43,8 @@ class EspAdc(BaseInstrument):
             return "Unknown IP"
 
     def start_record(self, file: str):
+        if not file.startswith("/"):
+            file = "/" + file
         return self.query(f"start={file}")
 
     def stop_record(self):

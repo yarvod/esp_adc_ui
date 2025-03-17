@@ -102,10 +102,16 @@ String checkRecordingStatus() {
 
 String processRequest(String command) {
   if (command == "adc") {
+    if (isRecording) {
+      return "Error: Unable readAdc during recording!";
+    }
     return readADCPretty();
   } else if (command == "ip") {
     return getIp();
   } else if (command.startsWith("wifi=")) {
+    if (isRecording) {
+      return "Error: Unable setup wifi during recording!";
+    }
     int sep1 = command.indexOf(';');
     int sep2 = command.lastIndexOf(';');
     String wifi = command.substring(5, sep1);
@@ -113,6 +119,9 @@ String processRequest(String command) {
     String pwd = command.substring(sep2 + 5);
     configureWifi(wifi.c_str(), ssid.c_str(), pwd.c_str());
   } else if (command.startsWith("setGain=")) {
+    if (isRecording) {
+      return "Error: Unable set Gain during recording!";
+    }
     int gainValue = command.substring(8).toInt();
     setGain(gainValue);
     return String(gainValue);
@@ -133,6 +142,9 @@ String processRequest(String command) {
     return response;
   } else if (command.startsWith("delete=")) {
     String fileName = command.substring(7);
+    if (isRecording && currentFileName == fileName) {
+      return "Error: Unable delete current recording file!";
+    }
     if (SD.exists(fileName)) {
       SD.remove(fileName);
       return "File " + fileName + " deleted";
@@ -157,6 +169,10 @@ String processRequest(String command) {
     return checkRecordingStatus();
   } else if (command == "deinitSD") {
     if (isSDInitialized) {
+      if (isRecording) {
+        isRecording = false;
+        flushBufferToSD();
+      }
       SD.end();
       isSDInitialized = false;
       return "SD card deinitialized. Safe to remove.";
@@ -190,6 +206,7 @@ void flushBufferToSD() {
       dataFile.close();
       bufferIndex = 0; // Сброс индекса буфера
     } else {
+      isRecording = false;
       Serial.println("Error: Failed to open file for writing");
     }
   }
