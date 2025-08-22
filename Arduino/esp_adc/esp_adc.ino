@@ -1,5 +1,3 @@
-#include <Wire.h>
-#include <Adafruit_ADS1X15.h>
 #include <WiFi.h>
 #include <Preferences.h>
 #include <SD.h>
@@ -7,21 +5,30 @@
 
 #define WIFI_SSID "esp"
 #define WIFI_PASSWORD "12345678"
-#define WIFI_CONNECT_TIMEOUT 30000  // 30 секунд
-#define SD_CS_PIN 5                 // Пин для SD-карты
-#define SD_BUFFER_SIZE 860          // Буфер для записи на SD (как и было, только переименован)
-#define RT_BUFFER_SIZE 256          // Кольцевой рантайм-буфер для свежих данных
-#define CHUNK_SIZE 1024             // Размер чанка для передачи файла
+#define WIFI_CONNECT_TIMEOUT 30000
+#define SD_CS_PIN 5
+#define SD_BUFFER_SIZE 860
+#define RT_BUFFER_SIZE 256
+#define CHUNK_SIZE 1024
 
-Adafruit_ADS1115 ads;
+// --- Встроенный АЦП ESP32 (ADC1) ---
+#define ADC_PIN0 32          // ADC1_CH4
+#define ADC_PIN1 33          // ADC1_CH5
+#define ADC_PIN2 34          // ADC1_CH6 (input-only)
+#define ADC_WIDTH_BITS 12
+#define ADC_ATTEN      ADC_11db   // ~0..3.3–3.6 В
+
+// --- Параметры фильтрации/выдачи ---
+#define OUTPUT_HZ      100        // целевая частота выдачи
+#define OVERSAMPLE     16         // сколько раз читаем каждый пин на кадр
+#define EMA_ALPHA      0.25f      // коэффициент экспоненциального фильтра (0..1)
+
 WiFiServer wifiServer(80);
 Preferences preferences;
 File dataFile;
 String currentFileName = "";
 bool isRecording = false;
 bool isSDInitialized = false;
-
-adsGain_t currentGain = GAIN_TWOTHIRDS;
 
 // ----- Формат точки данных -----
 struct DataPoint {
@@ -31,15 +38,14 @@ struct DataPoint {
   float adc2;
 };
 
-// ----- Рантайм-буфер (источник истины для adc и для записи) -----
+// ----- Рантайм-буфер -----
 DataPoint rtBuffer[RT_BUFFER_SIZE];
-volatile int rtHead = 0;         // позиция для следующей записи
-volatile bool rtHasData = false; // хоть что-то уже есть?
+volatile int rtHead = 0;
+volatile bool rtHasData = false;
 volatile bool samplingEnabled = false;
-
 portMUX_TYPE rtMux = portMUX_INITIALIZER_UNLOCKED;
 
-// ----- Отдельный буфер для сохранения на SD (как просил, не трогал по смыслу) -----
+// ----- Буфер для SD -----
 DataPoint sdBuffer[SD_BUFFER_SIZE];
 int sdBufferIndex = 0;
 
@@ -48,47 +54,37 @@ void flushBufferToSD();
 void hostFile(WiFiClient client, String fileName);
 String processRequest(String command);
 
-// ======================= Утилиты АЦП =========================
-adsGain_t setGain(int gainValue) {
-  adsGain_t gain = static_cast<adsGain_t>(gainValue);
-  ads.setGain(gain);
-  currentGain = gain;
-  return gain;
-}
-
-adsGain_t getGain() {
-  return ads.getGain();
-}
-
-float getMultiplier() {
-  switch (currentGain) {
-    case GAIN_TWOTHIRDS: return 0.1875F;
-    case GAIN_ONE:       return 0.125F;
-    case GAIN_TWO:       return 0.0625F;
-    case GAIN_FOUR:      return 0.03125F;
-    case GAIN_EIGHT:     return 0.015625F;
-    case GAIN_SIXTEEN:   return 0.0078125F;
-    default:             return 0.1875F;
-  }
+// ======================= АЦП хелперы ========================
+static inline int mv_oversampled(int pin, int n = OVERSAMPLE) {
+  long s = 0;
+  for (int i = 0; i < n; ++i) s += analogReadMilliVolts(pin);
+  return (int)(s / n);
 }
 
 void readADC(float* result) {
-  int16_t adc0 = ads.readADC_SingleEnded(0);
-  int16_t adc1 = ads.readADC_SingleEnded(1);
-  int16_t adc2 = ads.readADC_SingleEnded(2);
-  float multiplier = getMultiplier();
-  result[0] = multiplier * adc0;
-  result[1] = multiplier * adc1;
-  result[2] = multiplier * adc2;
+  // Пересъём + EMA для сглаживания
+  static bool ema_init = false;
+  static float e0 = 0, e1 = 0, e2 = 0;
+
+  float x0 = (float)mv_oversampled(ADC_PIN0);
+  float x1 = (float)mv_oversampled(ADC_PIN1);
+  float x2 = (float)mv_oversampled(ADC_PIN2);
+
+  if (!ema_init) { e0 = x0; e1 = x1; e2 = x2; ema_init = true; }
+  else {
+    e0 += EMA_ALPHA * (x0 - e0);
+    e1 += EMA_ALPHA * (x1 - e1);
+    e2 += EMA_ALPHA * (x2 - e2);
+  }
+
+  result[0] = e0;
+  result[1] = e1;
+  result[2] = e2;
 }
 
 // ======================= Рантайм-буфер =======================
-inline void startSampling() {
-  samplingEnabled = true;
-}
-inline void stopSampling() {
-  samplingEnabled = false;
-}
+inline void startSampling() { samplingEnabled = true; }
+inline void stopSampling()  { samplingEnabled = false; }
 
 inline void rtPushSample(const DataPoint& dp) {
   portENTER_CRITICAL(&rtMux);
@@ -98,7 +94,6 @@ inline void rtPushSample(const DataPoint& dp) {
   portEXIT_CRITICAL(&rtMux);
 }
 
-// Получить последний семпл; false — если данных пока нет
 bool rtGetLatest(DataPoint& out) {
   if (!rtHasData) return false;
   portENTER_CRITICAL(&rtMux);
@@ -109,14 +104,10 @@ bool rtGetLatest(DataPoint& out) {
 }
 
 String readADCPretty() {
-  // если сбор не идёт — включим
-  if (!samplingEnabled) {
-    startSampling();
-  }
+  if (!samplingEnabled) startSampling();
 
   DataPoint dp;
   if (!rtGetLatest(dp)) {
-    // буфер ещё пуст — мгновенно снимем один семпл и положим его
     float v[3];
     readADC(v);
     DataPoint now{ millis(), v[0], v[1], v[2] };
@@ -126,7 +117,7 @@ String readADCPretty() {
 
   char out[64];
   snprintf(out, sizeof(out),
-           "ADC0: %.2f mV; ADC1: %.2f mV; ADC2: %.2f mV;",
+           "ADC0: %.1f mV; ADC1: %.1f mV; ADC2: %.1f mV;",
            dp.adc0, dp.adc1, dp.adc2);
   return String(out);
 }
@@ -136,18 +127,14 @@ void configureWifi(const char* wifi, const char* ssid, const char* pwd) {
   preferences.putString("wifi", wifi);
   preferences.putString("ssid", ssid);
   preferences.putString("pwd", pwd);
-
   Serial.println("WiFi settings saved. Restarting...");
   ESP.restart();
 }
 
 String getIp() {
   String wifiType = preferences.getString("wifi", "own");
-  if (wifiType == "own") {
-    return "192.168.4.1";
-  } else {
-    return WiFi.localIP().toString();
-  }
+  if (wifiType == "own") return "192.168.4.1";
+  return WiFi.localIP().toString();
 }
 
 // ======================= SD запись ===========================
@@ -157,12 +144,12 @@ void flushBufferToSD() {
     if (dataFile) {
       for (int i = 0; i < sdBufferIndex; i++) {
         char line[64];
-        snprintf(line, sizeof(line), "%lu; %.2f; %.2f; %.2f",
+        snprintf(line, sizeof(line), "%lu; %.1f; %.1f; %.1f",
                  sdBuffer[i].timestamp, sdBuffer[i].adc0, sdBuffer[i].adc1, sdBuffer[i].adc2);
         dataFile.println(line);
       }
       dataFile.close();
-      sdBufferIndex = 0; // сброс индекса SD-буфера
+      sdBufferIndex = 0;
     } else {
       isRecording = false;
       Serial.println("Error: Failed to open file for writing");
@@ -172,50 +159,30 @@ void flushBufferToSD() {
 
 // ======================= Команды =============================
 String checkRecordingStatus() {
-  if (isRecording) {
-    return "Recording to " + currentFileName;
-  } else {
-    return "Not recording";
-  }
+  return isRecording ? ("Recording to " + currentFileName) : "Not recording";
 }
 
 String processRequest(String command) {
   if (command == "adc") {
-    // теперь всегда можно читать, даже во время записи
     return readADCPretty();
 
   } else if (command == "ip") {
     return getIp();
 
   } else if (command.startsWith("wifi=")) {
-    if (isRecording) {
-      return "Error: Unable setup wifi during recording!";
-    }
+    if (isRecording) return "Error: Unable setup wifi during recording!";
     int sep1 = command.indexOf(';');
     int sep2 = command.lastIndexOf(';');
     String wifi = command.substring(5, sep1);
     String ssid = command.substring(sep1 + 6, sep2);
-    String pwd = command.substring(sep2 + 5);
+    String pwd  = command.substring(sep2 + 5);
     configureWifi(wifi.c_str(), ssid.c_str(), pwd.c_str());
 
-  } else if (command.startsWith("setGain=")) {
-    if (isRecording) {
-      return "Error: Unable set Gain during recording!";
-    }
-    int gainValue = command.substring(8).toInt();
-    setGain(gainValue);
-    return String(gainValue);
-
-  } else if (command.startsWith("gain")) {
-    return String(getGain());
-
   } else if (command.startsWith("start=")) {
-    if (isRecording) {
-      return "Error: Unable to start new recording due to " + currentFileName;
-    }
+    if (isRecording) return "Error: Unable to start new recording due to " + currentFileName;
     currentFileName = command.substring(6);
     isRecording = true;
-    startSampling(); // включаем сбор семплов
+    startSampling();
     return "Recording started in " + currentFileName;
 
   } else if (command == "stop") {
@@ -223,34 +190,22 @@ String processRequest(String command) {
     flushBufferToSD();
     String response = "Recording stopped in " + currentFileName;
     currentFileName = "";
-    // samplingEnabled оставляем включённым, чтобы adc сразу был «живой»
     return response;
 
   } else if (command.startsWith("delete=")) {
     String fileName = command.substring(7);
-    if (isRecording && currentFileName == fileName) {
-      return "Error: Unable delete current recording file!";
-    }
-    if (SD.exists(fileName)) {
-      SD.remove(fileName);
-      return "File " + fileName + " deleted";
-    } else {
-      return "Error: File " + fileName + " not found";
-    }
+    if (isRecording && currentFileName == fileName) return "Error: Unable delete current recording file!";
+    if (SD.exists(fileName)) { SD.remove(fileName); return "File " + fileName + " deleted"; }
+    else return "Error: File " + fileName + " not found";
 
   } else if (command == "files") {
     String fileList = "";
     File root = SD.open("/");
     if (root) {
       File file = root.openNextFile();
-      while (file) {
-        fileList += String(file.name()) + ";";
-        file = root.openNextFile();
-      }
+      while (file) { fileList += String(file.name()) + ";"; file = root.openNextFile(); }
       file.close();
-    } else {
-      return "Error: Failed to open directory";
-    }
+    } else return "Error: Failed to open directory";
     return fileList;
 
   } else if (command == "checkRecording") {
@@ -258,28 +213,16 @@ String processRequest(String command) {
 
   } else if (command == "deinitSD") {
     if (isSDInitialized) {
-      if (isRecording) {
-        isRecording = false;
-        flushBufferToSD();
-      }
-      SD.end();
-      isSDInitialized = false;
+      if (isRecording) { isRecording = false; flushBufferToSD(); }
+      SD.end(); isSDInitialized = false;
       return "SD card deinitialized. Safe to remove.";
-    } else {
-      return "SD card is already deinitialized.";
-    }
+    } else return "SD card is already deinitialized.";
 
   } else if (command == "initSD") {
     if (!isSDInitialized) {
-      if (SD.begin(SD_CS_PIN)) {
-        isSDInitialized = true;
-        return "SD card initialized.";
-      } else {
-        return "Failed to initialize SD card.";
-      }
-    } else {
-      return "SD card is already initialized.";
-    }
+      if (SD.begin(SD_CS_PIN)) { isSDInitialized = true; return "SD card initialized."; }
+      else return "Failed to initialize SD card.";
+    } else return "SD card is already initialized.";
   }
 
   return "command not found";
@@ -289,57 +232,54 @@ String processRequest(String command) {
 void setup() {
   Serial.begin(115200);
 
-  ads.setGain(currentGain);
-  ads.setDataRate(RATE_ADS1115_860SPS);
-  ads.begin();
+  // --- ESP32 ADC1 init ---
+  analogReadResolution(ADC_WIDTH_BITS);
+  pinMode(ADC_PIN0, INPUT);
+  pinMode(ADC_PIN1, INPUT);
+  pinMode(ADC_PIN2, INPUT);
+  analogSetPinAttenuation(ADC_PIN0, ADC_ATTEN);
+  analogSetPinAttenuation(ADC_PIN1, ADC_ATTEN);
+  analogSetPinAttenuation(ADC_PIN2, ADC_ATTEN);
 
+  // --- WiFi ---
   preferences.begin("wifi-settings", false);
-
   String wifiType = preferences.getString("wifi", "own");
   String ssid = preferences.getString("ssid", WIFI_SSID);
   String password = preferences.getString("pwd", WIFI_PASSWORD);
 
   if (wifiType == "other") {
-    Serial.print("Connecting to existing WiFi SSID ");
-    Serial.println(ssid);
+    Serial.print("Connecting to existing WiFi SSID "); Serial.println(ssid);
     WiFi.begin(ssid.c_str(), password.c_str());
-  } else if (wifiType == "own") {
-    Serial.print("Creating own WiFi SSID ");
-    Serial.println(ssid);
+  } else {
+    Serial.print("Creating own WiFi SSID "); Serial.println(ssid);
     WiFi.softAP(ssid.c_str(), password.c_str());
-    WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
+    WiFi.softAPConfig(IPAddress(192,168,4,1), IPAddress(192,168,4,1), IPAddress(255,255,255,0));
   }
 
   unsigned long startAttemptTime = millis();
   while (WiFi.status() != WL_CONNECTED && wifiType == "other") {
-    Serial.print(".");
-    delay(500);
+    Serial.print("."); delay(500);
     if (millis() - startAttemptTime > WIFI_CONNECT_TIMEOUT) {
       Serial.println("\nFailed to connect to WiFi. Continuing without WiFi.");
       break;
     }
   }
-
   if (WiFi.status() == WL_CONNECTED || wifiType == "own") {
-    Serial.print("\nWiFi connected. IP address: ");
-    Serial.println(getIp());
+    Serial.print("\nWiFi connected. IP address: "); Serial.println(getIp());
     wifiServer.begin();
   }
 
-  if (SD.begin(SD_CS_PIN)) {
-    isSDInitialized = true;
-    Serial.println("SD card initialized.");
-  } else {
-    Serial.println("SD card initialization failed!");
-  }
+  if (SD.begin(SD_CS_PIN)) { isSDInitialized = true; Serial.println("SD card initialized."); }
+  else { Serial.println("SD card initialization failed!"); }
 
+  // Запускаем задачи
   xTaskCreatePinnedToCore(handleSerialCommands, "HandleSerial", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(handleWiFiCommands,   "HandleWiFi",   4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(dataCollectionTask,   "DataCollection",4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
-  // Основной цикл пуст — задачи работают в отдельных потоках
+  // задачи сами всё делают
 }
 
 // ======================= Задачи ==============================
@@ -358,15 +298,11 @@ void handleWiFiCommands(void * parameter) {
   while (true) {
     if (WiFi.status() == WL_CONNECTED || WiFi.getMode() == WIFI_AP) {
       WiFiClient client = wifiServer.available();
-
       if (client) {
         while (client.connected()) {
           while (client.available() > 0) {
             String request = client.readStringUntil('\n');
-
-            request.replace("\r", "");
-            request.replace("\n", "");
-
+            request.replace("\r", ""); request.replace("\n", "");
             if (request.startsWith("hostFile=")) {
               String fileName = request.substring(9);
               hostFile(client, fileName);
@@ -377,7 +313,6 @@ void handleWiFiCommands(void * parameter) {
           }
           vTaskDelay(10 / portTICK_PERIOD_MS);
         }
-
         client.stop();
         Serial.println("Client disconnected");
       }
@@ -387,26 +322,28 @@ void handleWiFiCommands(void * parameter) {
 }
 
 void dataCollectionTask(void * parameter) {
+  const TickType_t period = pdMS_TO_TICKS(1000 / OUTPUT_HZ); // 10 мс при 100 Гц
+  TickType_t lastWake = xTaskGetTickCount();
+
+  // сразу включим сбор
+  samplingEnabled = true;
+
   while (true) {
     if (samplingEnabled) {
       float v[3];
-      readADC(v);
+      readADC(v); // oversample + EMA
       DataPoint dp{ millis(), v[0], v[1], v[2] };
 
-      // 1) всегда кладём в рантайм-буфер
+      // 1) в рантайм-буфер
       rtPushSample(dp);
 
-      // 2) если идёт запись — дублируем в SD-буфер
+      // 2) при записи — в SD-буфер
       if (isRecording && isSDInitialized) {
         sdBuffer[sdBufferIndex] = dp;
-        sdBufferIndex++;
-        if (sdBufferIndex >= SD_BUFFER_SIZE) {
-          flushBufferToSD();
-        }
+        if (++sdBufferIndex >= SD_BUFFER_SIZE) flushBufferToSD();
       }
     }
-    // ~1 кГц (ADS1115 на 860 SPS — норм), можно увеличить до 2-3 мс при желании
-    vTaskDelay(pdMS_TO_TICKS(1));
+    vTaskDelayUntil(&lastWake, period); // держим ровно 100 Гц
   }
 }
 
@@ -420,15 +357,11 @@ void hostFile(WiFiClient client, String fileName) {
       while ((bytesRead = file.read(txbuf, CHUNK_SIZE)) > 0) {
         Serial.println("Sent chunk");
         client.write(txbuf, bytesRead);
-        vTaskDelay(pdMS_TO_TICKS(1)); // короткая пауза, чтобы не душить клиент
+        vTaskDelay(pdMS_TO_TICKS(1));
       }
       file.close();
       client.stop();
       Serial.println("File sent successfully");
-    } else {
-      client.println("Error: Failed to open file");
-    }
-  } else {
-    client.println("Error: File not found");
-  }
+    } else client.println("Error: Failed to open file");
+  } else client.println("Error: File not found");
 }
