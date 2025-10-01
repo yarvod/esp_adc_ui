@@ -19,7 +19,7 @@
 #define ADS_GAIN GAIN_ONE
 // Частота выборки: ставим 860 SPS, чтобы успевать читать 3 канала при 100 Гц
 #define ADS_DATA_RATE RATE_ADS1115_860SPS
-Adafruit_ADS1115 ads(ADS_I2C_ADDR);
+Adafruit_ADS1115 ads; // address passed in begin()
 adsGain_t currentAdsGain = ADS_GAIN;
 
 // --- Параметры фильтрации/выдачи ---
@@ -309,7 +309,7 @@ void setup() {
 
   // --- I2C + ADS1115 init ---
   Wire.begin(); // Для ESP32 по умолчанию SDA=21, SCL=22
-  if (!ads.begin()) {
+  if (!ads.begin(ADS_I2C_ADDR)) {
     Serial.println("Failed to initialize ADS1115! Check wiring/address.");
   } else {
     ads.setGain(currentAdsGain);
