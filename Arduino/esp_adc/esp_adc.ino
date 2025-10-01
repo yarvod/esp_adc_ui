@@ -20,6 +20,7 @@
 // Частота выборки: ставим 860 SPS, чтобы успевать читать 3 канала при 100 Гц
 #define ADS_DATA_RATE RATE_ADS1115_860SPS
 Adafruit_ADS1115 ads(ADS_I2C_ADDR);
+adsGain_t currentAdsGain = ADS_GAIN;
 
 // --- Параметры фильтрации/выдачи ---
 #define OUTPUT_HZ      100        // целевая частота выдачи
@@ -56,6 +57,9 @@ int sdBufferIndex = 0;
 void flushBufferToSD();
 void hostFile(WiFiClient client, String fileName);
 String processRequest(String command);
+adsGain_t parseAdsGain(const String& s, bool& ok);
+int adsGainToIndex(adsGain_t g);
+adsGain_t indexToAdsGain(int idx, bool& ok);
 
 // ======================= АЦП хелперы ========================
 static inline int ads_mv(uint8_t ch, int n = OVERSAMPLE) {
@@ -91,7 +95,6 @@ void readADC(float* result) {
 
 // ======================= Рантайм-буфер =======================
 inline void startSampling() { samplingEnabled = true; }
-inline void stopSampling()  { samplingEnabled = false; }
 
 inline void rtPushSample(const DataPoint& dp) {
   portENTER_CRITICAL(&rtMux);
@@ -176,6 +179,33 @@ String processRequest(String command) {
   } else if (command == "ip") {
     return getIp();
 
+  } else if (command == "adsGain") {
+    // Возвращаем индекс гейна 0..5 для совместимости с клиентом
+    return String(adsGainToIndex(currentAdsGain));
+
+  } else if (command.startsWith("adsGain=")) {
+    String val = command.substring(8);
+    bool ok = false;
+    adsGain_t g;
+    // Пытаемся как индекс 0..5
+    bool isNumber = true;
+    for (size_t i = 0; i < val.length(); ++i) { char c = val[i]; if (i==0 && (c=='+'||c=='-')) continue; if (c < '0' || c > '9') { isNumber = false; break; } }
+    if (isNumber) {
+      int idx = val.toInt();
+      g = indexToAdsGain(idx, ok);
+    } else {
+      // Фоллбэк: старые строковые обозначения
+      g = parseAdsGain(val, ok);
+    }
+    if (!ok) return String("Error: Invalid gain value '") + val + "'. Use index 0..5 or 2/3,1,2,4,8,16";
+    bool wasSampling = samplingEnabled;
+    samplingEnabled = false; // краткая пауза, чтобы безопасно сменить настройку
+    vTaskDelay(pdMS_TO_TICKS(2));
+    currentAdsGain = g;
+    ads.setGain(currentAdsGain);
+    samplingEnabled = wasSampling;
+    return String(adsGainToIndex(currentAdsGain));
+
   } else if (command.startsWith("wifi=")) {
     if (isRecording) return "Error: Unable setup wifi during recording!";
     int sep1 = command.indexOf(';');
@@ -235,6 +265,44 @@ String processRequest(String command) {
   return "command not found";
 }
 
+// ======================= Gain helpers ========================
+adsGain_t parseAdsGain(const String& s, bool& ok) {
+  ok = true;
+  String v = s; v.trim();
+  if (v == "2/3" || v == "0.666" || v == "0.667") return GAIN_TWOTHIRDS; // ±6.144V
+  if (v == "1"   || v == "1x"   || v == "4.096") return GAIN_ONE;        // ±4.096V
+  if (v == "2"   || v == "2x"   || v == "2.048") return GAIN_TWO;        // ±2.048V
+  if (v == "4"   || v == "4x"   || v == "1.024") return GAIN_FOUR;       // ±1.024V
+  if (v == "8"   || v == "8x"   || v == "0.512") return GAIN_EIGHT;      // ±0.512V
+  if (v == "16"  || v == "16x"  || v == "0.256") return GAIN_SIXTEEN;    // ±0.256V
+  ok = false; return GAIN_ONE;
+}
+
+int adsGainToIndex(adsGain_t g) {
+  switch (g) {
+    case GAIN_TWOTHIRDS: return 0; // ±6.144V
+    case GAIN_ONE:       return 1; // ±4.096V
+    case GAIN_TWO:       return 2; // ±2.048V
+    case GAIN_FOUR:      return 3; // ±1.024V
+    case GAIN_EIGHT:     return 4; // ±0.512V
+    case GAIN_SIXTEEN:   return 5; // ±0.256V
+  }
+  return 1;
+}
+
+adsGain_t indexToAdsGain(int idx, bool& ok) {
+  ok = true;
+  switch (idx) {
+    case 0: return GAIN_TWOTHIRDS; // ±6.144V
+    case 1: return GAIN_ONE;       // ±4.096V
+    case 2: return GAIN_TWO;       // ±2.048V
+    case 3: return GAIN_FOUR;      // ±1.024V
+    case 4: return GAIN_EIGHT;     // ±0.512V
+    case 5: return GAIN_SIXTEEN;   // ±0.256V
+  }
+  ok = false; return GAIN_ONE;
+}
+
 // ======================= setup/loop ==========================
 void setup() {
   Serial.begin(115200);
@@ -244,7 +312,7 @@ void setup() {
   if (!ads.begin()) {
     Serial.println("Failed to initialize ADS1115! Check wiring/address.");
   } else {
-    ads.setGain(ADS_GAIN);
+    ads.setGain(currentAdsGain);
     ads.setDataRate(ADS_DATA_RATE);
     Serial.println("ADS1115 initialized.");
   }
