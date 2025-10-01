@@ -60,6 +60,8 @@ String processRequest(String command);
 adsGain_t parseAdsGain(const String& s, bool& ok);
 int adsGainToIndex(adsGain_t g);
 adsGain_t indexToAdsGain(int idx, bool& ok);
+const char* adsGainRangeStr(adsGain_t g);
+int adsDataRateToSPS(int r);
 
 // ======================= АЦП хелперы ========================
 static inline int ads_mv(uint8_t ch, int n = OVERSAMPLE) {
@@ -201,9 +203,14 @@ String processRequest(String command) {
     bool wasSampling = samplingEnabled;
     samplingEnabled = false; // краткая пауза, чтобы безопасно сменить настройку
     vTaskDelay(pdMS_TO_TICKS(2));
+    int fromIdx = adsGainToIndex(currentAdsGain);
     currentAdsGain = g;
     ads.setGain(currentAdsGain);
     samplingEnabled = wasSampling;
+    int toIdx = adsGainToIndex(currentAdsGain);
+    Serial.print("ADS1115: gain changed ");
+    Serial.print(fromIdx); Serial.print(" -> "); Serial.print(toIdx);
+    Serial.print(" (range "); Serial.print(adsGainRangeStr(currentAdsGain)); Serial.println(")");
     return String(adsGainToIndex(currentAdsGain));
 
   } else if (command.startsWith("wifi=")) {
@@ -303,6 +310,32 @@ adsGain_t indexToAdsGain(int idx, bool& ok) {
   ok = false; return GAIN_ONE;
 }
 
+const char* adsGainRangeStr(adsGain_t g) {
+  switch (g) {
+    case GAIN_TWOTHIRDS: return "±6.144V";
+    case GAIN_ONE:       return "±4.096V";
+    case GAIN_TWO:       return "±2.048V";
+    case GAIN_FOUR:      return "±1.024V";
+    case GAIN_EIGHT:     return "±0.512V";
+    case GAIN_SIXTEEN:   return "±0.256V";
+  }
+  return "unknown";
+}
+
+int adsDataRateToSPS(int r) {
+  switch (r) {
+    case RATE_ADS1115_8SPS:   return 8;
+    case RATE_ADS1115_16SPS:  return 16;
+    case RATE_ADS1115_32SPS:  return 32;
+    case RATE_ADS1115_64SPS:  return 64;
+    case RATE_ADS1115_128SPS: return 128;
+    case RATE_ADS1115_250SPS: return 250;
+    case RATE_ADS1115_475SPS: return 475;
+    case RATE_ADS1115_860SPS: return 860;
+  }
+  return -1;
+}
+
 // ======================= setup/loop ==========================
 void setup() {
   Serial.begin(115200);
@@ -315,6 +348,14 @@ void setup() {
     ads.setGain(currentAdsGain);
     ads.setDataRate(ADS_DATA_RATE);
     Serial.println("ADS1115 initialized.");
+    Serial.print("ADS1115: I2C address 0x"); Serial.println(ADS_I2C_ADDR, HEX);
+    Serial.print("ADS1115: channels A0,A1,A2 single-ended; units mV\n");
+    Serial.print("ADS1115: gain index "); Serial.print(adsGainToIndex(currentAdsGain));
+    Serial.print(" (range "); Serial.print(adsGainRangeStr(currentAdsGain)); Serial.println(")");
+    Serial.print("ADS1115: data rate "); Serial.print(adsDataRateToSPS(ADS_DATA_RATE)); Serial.println(" SPS");
+    Serial.print("Acquisition: OUTPUT_HZ="); Serial.print(OUTPUT_HZ);
+    Serial.print(" Hz, OVERSAMPLE="); Serial.print(OVERSAMPLE);
+    Serial.print(", EMA_ALPHA="); Serial.println(EMA_ALPHA, 3);
   }
 
   // --- WiFi ---
