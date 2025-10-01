@@ -2,6 +2,8 @@
 #include <Preferences.h>
 #include <SD.h>
 #include <SPI.h>
+#include <Wire.h>
+#include <Adafruit_ADS1X15.h>
 
 #define WIFI_SSID "esp"
 #define WIFI_PASSWORD "12345678"
@@ -11,16 +13,17 @@
 #define RT_BUFFER_SIZE 256
 #define CHUNK_SIZE 1024
 
-// --- Встроенный АЦП ESP32 (ADC1) ---
-#define ADC_PIN0 32          // ADC1_CH4
-#define ADC_PIN1 33          // ADC1_CH5
-#define ADC_PIN2 34          // ADC1_CH6 (input-only)
-#define ADC_WIDTH_BITS 12
-#define ADC_ATTEN      ADC_11db   // ~0..3.3–3.6 В
+// --- Внешний АЦП ADS1115 по I2C ---
+#define ADS_I2C_ADDR 0x48
+// Усиление: для входов до ~3.3 В используем GAIN_ONE (±4.096 В full-scale)
+#define ADS_GAIN GAIN_ONE
+// Частота выборки: ставим 860 SPS, чтобы успевать читать 3 канала при 100 Гц
+#define ADS_DATA_RATE RATE_ADS1115_860SPS
+Adafruit_ADS1115 ads(ADS_I2C_ADDR);
 
 // --- Параметры фильтрации/выдачи ---
 #define OUTPUT_HZ      100        // целевая частота выдачи
-#define OVERSAMPLE     16         // сколько раз читаем каждый пин на кадр
+#define OVERSAMPLE     1          // ADS1115: достаточно одного чтения на канал при 860 SPS
 #define EMA_ALPHA      0.25f      // коэффициент экспоненциального фильтра (0..1)
 
 WiFiServer wifiServer(80);
@@ -55,10 +58,14 @@ void hostFile(WiFiClient client, String fileName);
 String processRequest(String command);
 
 // ======================= АЦП хелперы ========================
-static inline int mv_oversampled(int pin, int n = OVERSAMPLE) {
+static inline int ads_mv(uint8_t ch, int n = OVERSAMPLE) {
   long s = 0;
-  for (int i = 0; i < n; ++i) s += analogReadMilliVolts(pin);
-  return (int)(s / n);
+  for (int i = 0; i < n; ++i) {
+    int16_t raw = ads.readADC_SingleEnded(ch);
+    float volts = ads.computeVolts(raw); // Вольты
+    s += (long)(volts * 1000.0f);        // мВ
+  }
+  return (int)(s / (n > 0 ? n : 1));
 }
 
 void readADC(float* result) {
@@ -66,9 +73,9 @@ void readADC(float* result) {
   static bool ema_init = false;
   static float e0 = 0, e1 = 0, e2 = 0;
 
-  float x0 = (float)mv_oversampled(ADC_PIN0);
-  float x1 = (float)mv_oversampled(ADC_PIN1);
-  float x2 = (float)mv_oversampled(ADC_PIN2);
+  float x0 = (float)ads_mv(0);
+  float x1 = (float)ads_mv(1);
+  float x2 = (float)ads_mv(2);
 
   if (!ema_init) { e0 = x0; e1 = x1; e2 = x2; ema_init = true; }
   else {
@@ -232,14 +239,15 @@ String processRequest(String command) {
 void setup() {
   Serial.begin(115200);
 
-  // --- ESP32 ADC1 init ---
-  analogReadResolution(ADC_WIDTH_BITS);
-  pinMode(ADC_PIN0, INPUT);
-  pinMode(ADC_PIN1, INPUT);
-  pinMode(ADC_PIN2, INPUT);
-  analogSetPinAttenuation(ADC_PIN0, ADC_ATTEN);
-  analogSetPinAttenuation(ADC_PIN1, ADC_ATTEN);
-  analogSetPinAttenuation(ADC_PIN2, ADC_ATTEN);
+  // --- I2C + ADS1115 init ---
+  Wire.begin(); // Для ESP32 по умолчанию SDA=21, SCL=22
+  if (!ads.begin()) {
+    Serial.println("Failed to initialize ADS1115! Check wiring/address.");
+  } else {
+    ads.setGain(ADS_GAIN);
+    ads.setDataRate(ADS_DATA_RATE);
+    Serial.println("ADS1115 initialized.");
+  }
 
   // --- WiFi ---
   preferences.begin("wifi-settings", false);
