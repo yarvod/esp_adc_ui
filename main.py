@@ -9,7 +9,9 @@ if __name__ == "__main__":
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(name)s] [%(levelname)s] %(message)s",
-        handlers=[logging.StreamHandler()],
+        handlers=[
+            logging.StreamHandler(),
+        ],
     )
     app = QApplication(sys.argv)
     ex = App()

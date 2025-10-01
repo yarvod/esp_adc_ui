@@ -1,12 +1,20 @@
+import platform
+import logging
 from typing import Union
 
 from PyQt5.QtCore import QSettings
 
 from api.constants import SERIAL, WIFI_TYPES, WIFI, GAIN_TYPES
 
+logger = logging.getLogger(__name__)
+
 
 class State:
-    settings = QSettings("settings.ini", QSettings.IniFormat)
+    if platform.system() == "Darwin":  # macOS
+        # будет хранить настройки в ~/Library/Preferences/ASC.EspAdc.plist
+        settings = QSettings("ASC", "EspAdc")
+    else:
+        settings = QSettings("settings.ini", QSettings.Format.IniFormat)
 
     adapter: str = settings.value("Init/adapter", SERIAL)
     host: str = settings.value("Init/host", "")
