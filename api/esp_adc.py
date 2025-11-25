@@ -42,10 +42,18 @@ class EspAdc(BaseInstrument):
         except UnicodeDecodeError:
             return "Unknown IP"
 
-    def start_record(self, file: str):
-        if not file.startswith("/"):
-            file = "/" + file
-        return self.query(f"start={file}")
+    def start_record(self, file: str = ""):
+        # Если имя не задано — формируем сами, чтобы не полагаться на прошивку
+        name = file or self._default_filename()
+        if not name.startswith("/"):
+            name = "/" + name
+        return self.query(f"start={name}")
+
+    @staticmethod
+    def _default_filename() -> str:
+        from datetime import datetime
+
+        return datetime.now().strftime("data_%Y%m%d_%H%M%S.txt")
 
     def stop_record(self):
         return self.query("stop")
@@ -60,7 +68,7 @@ class EspAdc(BaseInstrument):
     def delete_file(self, file: str):
         return self.query(f"delete={file}")
 
-    def download_file(self, file: str, on_progress=None, chunk_size: int = 65536):
+    def download_file(self, file: str, on_progress=None, chunk_size: int = 65536, dest_path: str = None):
         """Скачать файл по TCP с прогрессом-колбэком (байты_скачано, всего_байт). Возвращает (ok, msg)."""
 
         self.write(f"hostFile=/{file}")
@@ -86,8 +94,8 @@ class EspAdc(BaseInstrument):
             return False, f"Invalid header: {header}"
 
         downloaded = 0
-        dest_path = file
-        with open(dest_path, "wb") as f_out:
+        target = dest_path or file
+        with open(target, "wb") as f_out:
             while downloaded < total_size:
                 chunk = self.adapter.socket.recv(min(chunk_size, total_size - downloaded))
                 if not chunk:

@@ -3,11 +3,8 @@ import logging
 from PyQt5 import QtWidgets
 from PyQt5.QtGui import QIcon
 
-from application.widgets import PlotWidget
-from application.widgets.base_data import BaseData
+from application.widgets import PlotWidget, SdMeasureGroup, SdData, MonitorGroup, MeasureGroup
 from application.widgets.base_init import BaseInit
-from application.widgets.base_measure import BaseMeasure
-
 from application.widgets.config_group import ConfigGroup
 from application.widgets.log import LogWidget, LogHandler
 from application.widgets.monitor import MonitorGroup
@@ -36,9 +33,17 @@ class MainWidget(QtWidgets.QWidget):
         self.config_group = ConfigGroup(self)
         right_vlayout.addWidget(self.config_group)
 
-        right_vlayout.addWidget(BaseMeasure(self))
+        hlayout_measure = QtWidgets.QHBoxLayout()
+        self.measure_group = MeasureGroup(self)
+        self.sd_measure_group = SdMeasureGroup(self)
+        # чтобы иметь доступ из дочерних групп
+        self.measure_group.plot_widget = self.plot_widget
+        self.measure_group.monitor_widget = self.monitor_widget
+        hlayout_measure.addWidget(self.measure_group)
+        hlayout_measure.addWidget(self.sd_measure_group)
+        right_vlayout.addLayout(hlayout_measure)
 
-        right_vlayout.addWidget(BaseData(self))
+        right_vlayout.addWidget(SdData(self))
 
         hlayout.addLayout(left_vlayout)
         hlayout.addLayout(right_vlayout)

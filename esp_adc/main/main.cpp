@@ -2,6 +2,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
+#include <cerrno>
 #include <dirent.h>
 #include <fcntl.h>
 #include <string>
@@ -52,6 +54,7 @@ constexpr i2c_port_t I2C_PORT = I2C_NUM_0;
 constexpr uint32_t I2C_FREQ_HZ = 100000;
 constexpr uint8_t ADS_I2C_ADDR = 0x48;
 constexpr auto MOUNT_POINT = "/sdcard";
+constexpr size_t MAX_FILENAME_LEN = 32;
 
 constexpr int SD_BUFFER_SIZE = 860;
 constexpr int RT_BUFFER_SIZE = 256;
@@ -129,6 +132,32 @@ static std::string trim(const std::string &s) {
     if (start == std::string::npos) return {};
     const auto end = s.find_last_not_of(" \r\n\t");
     return s.substr(start, end - start + 1);
+}
+
+static std::string default_recording_name() {
+    time_t now = time(nullptr);
+    struct tm tm_info{};
+    char buf[64];
+    if (now > 0 && localtime_r(&now, &tm_info)) {
+        strftime(buf, sizeof(buf), "data_%Y%m%d_%H%M%S.txt", &tm_info);
+        return std::string(buf);
+    }
+    uint64_t ms = static_cast<uint64_t>(esp_timer_get_time() / 1000ULL);
+    snprintf(buf, sizeof(buf), "data_%llu.txt", static_cast<unsigned long long>(ms));
+    return std::string(buf);
+}
+
+static std::string sanitize_filename(const std::string &in) {
+    std::string out;
+    out.reserve(in.size());
+    for (char c : in) {
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.') {
+            out.push_back(c);
+        }
+    }
+    if (out.empty()) out = default_recording_name();
+    if (out.size() > MAX_FILENAME_LEN) out.resize(MAX_FILENAME_LEN);
+    return out;
 }
 
 static std::string ip_to_string(const esp_netif_ip_info_t &ip) {
@@ -502,7 +531,7 @@ static void flush_buffer_to_sd() {
         FILE *f = fopen(path.c_str(), "a");
         if (!f) {
             is_recording = false;
-            ESP_LOGE(TAG, "Failed to open %s for writing", path.c_str());
+            ESP_LOGE(TAG, "Failed to open %s for writing (errno=%d: %s)", path.c_str(), errno, strerror(errno));
             sd_buffer_index = 0;
             xSemaphoreGive(sd_mutex);
             return;
@@ -523,9 +552,16 @@ static std::string list_files() {
     DIR *dir = opendir(MOUNT_POINT);
     if (!dir) return "Error: Failed to open directory";
     std::string result;
+    // фильтруем типичные системные/longname сервисные файлы
+    const char *skip_prefixes[] = {"System Volume Information", "SYSTEM~", "FSEVE~", "SPOTL~", "TRASH~"};
     struct dirent *entry;
     while ((entry = readdir(dir)) != nullptr) {
         if (entry->d_name[0] == '.') continue;
+        bool skip = false;
+        for (auto p : skip_prefixes) {
+            if (strncmp(entry->d_name, p, strlen(p)) == 0) { skip = true; break; }
+        }
+        if (skip) continue;
         result += entry->d_name;
         result.push_back(';');
     }
@@ -562,10 +598,18 @@ static void host_file(int client_sock, const std::string &file_name) {
         send(client_sock, msg.c_str(), msg.size(), 0);
         return;
     }
-    FILE *f = fopen(path.c_str(), "rb");
+    FILE *f = nullptr;
+    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+        f = fopen(path.c_str(), "rb");
+    } else {
+        const char *msg = "Error: SD busy\n";
+        send(client_sock, msg, strlen(msg), 0);
+        return;
+    }
     if (!f) {
         const std::string msg = "Error: Failed to open file " + file_name + "\n";
         send(client_sock, msg.c_str(), msg.size(), 0);
+        xSemaphoreGive(sd_mutex);
         return;
     }
     // Отправляем размер, чтобы клиент мог показать прогресс
@@ -587,6 +631,7 @@ static void host_file(int client_sock, const std::string &file_name) {
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     fclose(f);
+    xSemaphoreGive(sd_mutex);
 }
 
 // ======================= Wi-Fi =======================================
@@ -727,8 +772,15 @@ static std::string process_request(const std::string &raw_command) {
         return "Restarting to apply WiFi settings";
 
     } else if (command.rfind("start=", 0) == 0) {
+        if (!sd_mounted) return "Error: SD card not initialized.";
         if (is_recording) return "Error: Unable to start new recording due to " + current_file_name;
-        current_file_name = command.substr(6);
+        std::string name = trim(command.substr(6));
+        if (name.empty() || name == "/") name = default_recording_name();
+        // оставляем только базовое имя без путей
+        const size_t slash = name.find_last_of('/');
+        if (slash != std::string::npos) name = name.substr(slash + 1);
+        name = sanitize_filename(name);
+        current_file_name = name;
         is_recording = true;
         start_sampling();
         return "Recording started in " + current_file_name;

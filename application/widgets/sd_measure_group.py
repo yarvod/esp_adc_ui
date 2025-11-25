@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -91,13 +92,8 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.setTitle("SD Measure")
         layout = QtWidgets.QVBoxLayout()
 
-        flayout_file = QtWidgets.QFormLayout()
         hlayout_buttons = QtWidgets.QHBoxLayout()
         hlayout_buttons_sd = QtWidgets.QHBoxLayout()
-
-        self.file_label = QtWidgets.QLabel("File:", self)
-
-        self.file = QtWidgets.QLineEdit(self)
 
         self.btn_start = QtWidgets.QPushButton("Start", self)
         self.btn_start.clicked.connect(self.start_measure)
@@ -114,14 +110,12 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.btn_deinit_sd = QtWidgets.QPushButton("Deinit SD", self)
         self.btn_deinit_sd.clicked.connect(lambda: self.init_sd(False))
 
-        flayout_file.addRow(self.file_label, self.file)
         hlayout_buttons.addWidget(self.btn_start)
         hlayout_buttons.addWidget(self.btn_stop)
         hlayout_buttons.addWidget(self.btn_check_status)
         hlayout_buttons_sd.addWidget(self.btn_init_sd)
         hlayout_buttons_sd.addWidget(self.btn_deinit_sd)
 
-        layout.addLayout(flayout_file)
         layout.addLayout(hlayout_buttons)
         layout.addLayout(hlayout_buttons_sd)
         layout.addStretch()
@@ -129,9 +123,10 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.setLayout(layout)
 
     def start_measure(self):
+        filename = datetime.now().strftime("data_%Y%m%d_%H%M%S.txt")
         self.thread_start = StartThread(
             parent=self,
-            file=self.file.text(),
+            file=filename,
         )
         self.thread_start.finished.connect(lambda: self.btn_start.setEnabled(True))
         self.thread_start.log.connect(self.set_log)

@@ -6,9 +6,7 @@ from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import pyqtSignal
 
 from api import EspAdc
-from store.data import MeasureManager
 from store.state import State
-
 
 logger = logging.getLogger(__name__)
 
@@ -20,29 +18,13 @@ class MeasureThread(QtCore.QThread):
 
     def __init__(self, parent, rps: int):
         super().__init__(parent)
-        self.store_data = State.store_data
         self.duration = State.duration
-        self.measure = None
         self.rps = rps
-
-    def create_measure(self):
-        if self.store_data:
-            self.measure = MeasureManager.create(
-                data={
-                    "rps": self.rps,
-                    "data": {channel: [] for channel in range(1, 4)},
-                    "time": [],
-                }
-            )
-            self.measure.save(finish=False)
 
     def run(self) -> None:
         try:
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
                 self.log.emit({"type": "info", "msg": "Device Connected!"})
-
-                self.create_measure()
-
                 start = time.time()
                 while State.is_measuring:
                     data_plot = []
@@ -51,16 +33,9 @@ class MeasureThread(QtCore.QThread):
                     if data:
                         duration = time.time() - start
                         a0, a1, a2 = data
-                        if self.store_data and self.measure:
-                            self.measure.data["data"][1].append(a0)
-                            self.measure.data["data"][2].append(a1)
-                            self.measure.data["data"][3].append(a2)
-                            self.measure.data["time"].append(duration)
-
                         data_plot.append({"channel": 1, "voltage": a0, "time": duration})
                         data_plot.append({"channel": 2, "voltage": a1, "time": duration})
                         data_plot.append({"channel": 3, "voltage": a2, "time": duration})
-
                         if duration > self.duration:
                             State.is_measuring = False
                     if data_plot:
@@ -69,12 +44,9 @@ class MeasureThread(QtCore.QThread):
             self.log.emit({"type": "error", "msg": str(e)})
             self.finish(1)
             return
-
         self.finish(0)
 
     def finish(self, code: int = 0):
-        if self.store_data and self.measure:
-            self.measure.save(finish=True)
         self.finished.emit(code)
 
 
@@ -82,7 +54,7 @@ class MeasureGroup(QtWidgets.QGroupBox):
     def __init__(self, parent):
         super().__init__(parent)
         self.thread_measure = None
-        self.setTitle("Local Measure")
+        self.setTitle("Monitor")
 
         vlayout = QtWidgets.QVBoxLayout()
         hlayout = QtWidgets.QHBoxLayout()
@@ -110,18 +82,11 @@ class MeasureGroup(QtWidgets.QGroupBox):
         self.rps.setValue(State.rps)
         self.rps.valueChanged.connect(self.set_rps)
 
-        self.store_data = QtWidgets.QCheckBox(self)
-        self.store_data.setText("Store Data")
-        self.store_data.setToolTip("Storing data to data table below")
-        self.store_data.setChecked(State.store_data)
-        self.store_data.stateChanged.connect(self.set_store_data)
-
         flayout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         flayout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         flayout.addRow("Measuring Time, s:", self.duration)
         flayout.addRow("RpS:", self.rps)
         flayout.addRow(self.is_plot_data, self.plot_window)
-        flayout.addRow(self.store_data)
 
         self.btn_start = QtWidgets.QPushButton("Start", self)
         self.btn_start.clicked.connect(self.start_measure)
@@ -136,8 +101,11 @@ class MeasureGroup(QtWidgets.QGroupBox):
         self.setLayout(vlayout)
 
     def start_measure(self):
-        self.parent().parent().plot_widget.clear()
-        self.parent().parent().monitor_widget.reset_values()
+        parent = self.parent()
+        if hasattr(parent, "plot_widget"):
+            parent.plot_widget.clear()
+        if hasattr(parent, "monitor_widget"):
+            parent.monitor_widget.reset_values()
         self.thread_measure = MeasureThread(self, rps=self.rps.value())
         self.thread_measure.data_plot.connect(self.plot_data)
         self.thread_measure.log.connect(self.set_log)
@@ -160,9 +128,11 @@ class MeasureGroup(QtWidgets.QGroupBox):
             logger.error("Measure finished due to Error!")
 
     def plot_data(self, data: list):
-        if self.is_plot_data.isChecked():
-            self.parent().parent().plot_widget.add_plots(data)
-        self.parent().parent().monitor_widget.add_data(data)
+        parent = self.parent()
+        if self.is_plot_data.isChecked() and hasattr(parent, "plot_widget"):
+            parent.plot_widget.add_plots(data)
+        if hasattr(parent, "monitor_widget"):
+            parent.monitor_widget.add_data(data)
 
     @staticmethod
     def set_duration(value):
@@ -181,20 +151,6 @@ class MeasureGroup(QtWidgets.QGroupBox):
     @staticmethod
     def set_plot_window(value):
         State.plot_window = int(value)
-
-    @staticmethod
-    def set_read_elements(value):
-        State.read_elements_count.value = int(value)
-
-    @staticmethod
-    def set_average(state):
-        value = state == QtCore.Qt.CheckState.Checked
-        State.is_average = value
-
-    @staticmethod
-    def set_store_data(state):
-        value = state == QtCore.Qt.CheckState.Checked
-        State.store_data = value
 
     @staticmethod
     def set_log(log: Dict):
