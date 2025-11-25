@@ -31,6 +31,7 @@ extern "C" {
 #include "driver/uart.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "lwip/tcp.h"
 #include "nvs_flash.h"
 #include "sdmmc_cmd.h"
 #include "esp_rom_sys.h"
@@ -58,7 +59,7 @@ constexpr size_t MAX_FILENAME_LEN = 32;
 
 constexpr int SD_BUFFER_SIZE = 860;
 constexpr int RT_BUFFER_SIZE = 256;
-constexpr int CHUNK_SIZE = 4096;
+constexpr int CHUNK_SIZE = 16384;
 constexpr int OUTPUT_HZ = 100;
 constexpr int OVERSAMPLE = 1;
 constexpr float EMA_ALPHA = 0.25f;
@@ -609,10 +610,12 @@ static void host_file(int client_sock, const std::string &file_name) {
         return;
     }
     FILE *f = nullptr;
-    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
+    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
         f = fopen(path.c_str(), "rb");
-    } else {
-        const char *msg = "Error: SD busy\n";
+        xSemaphoreGive(sd_mutex); // отпускаем сразу после открытия
+    }
+    if (!f) {
+        const char *msg = "Error: SD busy or failed to open\n";
         send(client_sock, msg, strlen(msg), 0);
         return;
     }
@@ -628,6 +631,8 @@ static void host_file(int client_sock, const std::string &file_name) {
         int hdr_len = snprintf(header, sizeof(header), "SIZE %lld\n", static_cast<long long>(st.st_size));
         send(client_sock, header, hdr_len, 0);
     }
+    int nodelay = 1;
+    setsockopt(client_sock, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay));
     std::vector<uint8_t> buf(CHUNK_SIZE);
     size_t read_bytes = 0;
     while ((read_bytes = fread(buf.data(), 1, buf.size(), f)) > 0) {
@@ -637,11 +642,8 @@ static void host_file(int client_sock, const std::string &file_name) {
             if (n <= 0) break;
             sent += static_cast<size_t>(n);
         }
-        // Небольшая уступка планировщику, чтобы не душить другие задачи
-        vTaskDelay(pdMS_TO_TICKS(1));
     }
     fclose(f);
-    xSemaphoreGive(sd_mutex);
 }
 
 // ======================= Wi-Fi =======================================

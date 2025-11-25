@@ -1,5 +1,6 @@
 import logging
 import re
+import socket
 from typing import Tuple, Optional
 
 from api.base import BaseInstrument
@@ -81,10 +82,16 @@ class EspAdc(BaseInstrument):
     def delete_file(self, file: str):
         return self.query(f"delete={file}")
 
-    def download_file(self, file: str, on_progress=None, chunk_size: int = 65536, dest_path: str = None):
+    def download_file(self, file: str, on_progress=None, chunk_size: int = 256 * 1024, dest_path: str = None):
         """Скачать файл по TCP с прогрессом-колбэком (байты_скачано, всего_байт). Возвращает (ok, msg)."""
 
         self.write(f"hostFile=/{file}")
+        # ускоряем передачу: отключаем Nagle и увеличиваем буфер приёма, если возможно
+        try:
+            self.adapter.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            self.adapter.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 512 * 1024)
+        except OSError:
+            pass
 
         def _recv_line(sock) -> str:
             buf = bytearray()
