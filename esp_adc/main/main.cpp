@@ -562,8 +562,18 @@ static std::string list_files() {
             if (strncmp(entry->d_name, p, strlen(p)) == 0) { skip = true; break; }
         }
         if (skip) continue;
-        result += entry->d_name;
-        result.push_back(';');
+        std::string fname = entry->d_name;
+        std::string path = std::string(MOUNT_POINT) + "/" + fname;
+        struct stat st{};
+        if (stat(path.c_str(), &st) == 0) {
+            char buf[128];
+            // формат: имя:байты;
+            snprintf(buf, sizeof(buf), "%s:%lld;", fname.c_str(), static_cast<long long>(st.st_size));
+            result += buf;
+        } else {
+            result += fname;
+            result.push_back(';');
+        }
     }
     closedir(dir);
     return result;

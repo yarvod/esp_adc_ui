@@ -63,7 +63,20 @@ class EspAdc(BaseInstrument):
 
     def get_files(self):
         response = self.query("files")
-        return response.split(";")
+        files = []
+        for item in response.split(";"):
+            if not item:
+                continue
+            if ":" in item:
+                name, size = item.split(":", 1)
+                try:
+                    size_int = int(size)
+                except ValueError:
+                    size_int = -1
+                files.append({"name": name, "size": size_int})
+            else:
+                files.append({"name": item, "size": -1})
+        return files
 
     def delete_file(self, file: str):
         return self.query(f"delete={file}")

@@ -117,7 +117,7 @@ class SdData(QtWidgets.QWidget, LogMixin):
         self.thread_get_files.start()
         self.btn_get_files.setEnabled(False)
 
-    def set_files_list(self, files: List[str]):
+    def set_files_list(self, files: List[dict]):
         # Очистка макета перед добавлением новых элементов
         while self.glayout_files.count():
             child = self.glayout_files.takeAt(0)
@@ -125,7 +125,9 @@ class SdData(QtWidgets.QWidget, LogMixin):
                 child.widget().deleteLater()
 
         skip_prefixes = ("SYSTEM~", "FSEVE~", "SPOTL~", "TRASH~")
-        for i, file in enumerate(files):
+        for i, file_info in enumerate(files):
+            file = file_info.get("name") if isinstance(file_info, dict) else file_info
+            size = file_info.get("size", -1) if isinstance(file_info, dict) else -1
             if (
                 not file
                 or file.startswith(".")
@@ -139,7 +141,8 @@ class SdData(QtWidgets.QWidget, LogMixin):
             btn_delete = QtWidgets.QPushButton("Delete", self)
             btn_delete.clicked.connect(partial(self.delete_file, file, i))
             setattr(self, f"btn_delete_{i}", btn_delete)
-            self.glayout_files.addWidget(QtWidgets.QLabel(file, self), i, 0)
+            size_mb = f"{size / (1024 * 1024):.2f} MB" if size and size > 0 else "N/A"
+            self.glayout_files.addWidget(QtWidgets.QLabel(f"{file} ({size_mb})", self), i, 0)
             self.glayout_files.addWidget(btn_download, i, 1)
             self.glayout_files.addWidget(btn_delete, i, 2)
 
