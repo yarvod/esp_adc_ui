@@ -55,7 +55,7 @@ constexpr auto MOUNT_POINT = "/sdcard";
 
 constexpr int SD_BUFFER_SIZE = 860;
 constexpr int RT_BUFFER_SIZE = 256;
-constexpr int CHUNK_SIZE = 1024;
+constexpr int CHUNK_SIZE = 4096;
 constexpr int OUTPUT_HZ = 100;
 constexpr int OVERSAMPLE = 1;
 constexpr float EMA_ALPHA = 0.25f;
@@ -495,30 +495,27 @@ static void deinit_sd_card() {
 
 static void flush_buffer_to_sd() {
     if (!sd_mounted || current_file_name.empty()) return;
-    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(50)) != pdTRUE) return;
+    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(100)) != pdTRUE) return;
     const int count = sd_buffer_index;
-    if (count == 0) {
-        xSemaphoreGive(sd_mutex);
-        return;
+    if (count > 0) {
+        const std::string path = std::string(MOUNT_POINT) + "/" + current_file_name;
+        FILE *f = fopen(path.c_str(), "a");
+        if (!f) {
+            is_recording = false;
+            ESP_LOGE(TAG, "Failed to open %s for writing", path.c_str());
+            sd_buffer_index = 0;
+            xSemaphoreGive(sd_mutex);
+            return;
+        }
+        for (int i = 0; i < count; ++i) {
+            fprintf(f, "%lu; %.1f; %.1f; %.1f\n",
+                    static_cast<unsigned long>(sd_buffer[i].timestamp_ms),
+                    sd_buffer[i].adc0, sd_buffer[i].adc1, sd_buffer[i].adc2);
+        }
+        fclose(f);
+        sd_buffer_index = 0;
     }
-    DataPoint local[SD_BUFFER_SIZE];
-    memcpy(local, sd_buffer, count * sizeof(DataPoint));
-    sd_buffer_index = 0;
     xSemaphoreGive(sd_mutex);
-
-    const std::string path = std::string(MOUNT_POINT) + "/" + current_file_name;
-    FILE *f = fopen(path.c_str(), "a");
-    if (!f) {
-        is_recording = false;
-        ESP_LOGE(TAG, "Failed to open %s for writing", path.c_str());
-        return;
-    }
-    for (int i = 0; i < count; ++i) {
-        fprintf(f, "%lu; %.1f; %.1f; %.1f\n",
-                static_cast<unsigned long>(local[i].timestamp_ms),
-                local[i].adc0, local[i].adc1, local[i].adc2);
-    }
-    fclose(f);
 }
 
 static std::string list_files() {
@@ -554,17 +551,39 @@ static void host_file(int client_sock, const std::string &file_name) {
         send(client_sock, msg, strlen(msg), 0);
         return;
     }
+    // Сброс буфера, чтобы файл содержал свежие данные записи
+    if (is_recording && current_file_name == file_name) {
+        flush_buffer_to_sd();
+    }
     const std::string path = std::string(MOUNT_POINT) + "/" + file_name;
+    struct stat st = {};
+    if (stat(path.c_str(), &st) != 0 || st.st_size < 0) {
+        const std::string msg = "Error: File not found\n";
+        send(client_sock, msg.c_str(), msg.size(), 0);
+        return;
+    }
     FILE *f = fopen(path.c_str(), "rb");
     if (!f) {
         const std::string msg = "Error: Failed to open file " + file_name + "\n";
         send(client_sock, msg.c_str(), msg.size(), 0);
         return;
     }
+    // Отправляем размер, чтобы клиент мог показать прогресс
+    {
+        char header[64];
+        int hdr_len = snprintf(header, sizeof(header), "SIZE %lld\n", static_cast<long long>(st.st_size));
+        send(client_sock, header, hdr_len, 0);
+    }
     std::vector<uint8_t> buf(CHUNK_SIZE);
     size_t read_bytes = 0;
     while ((read_bytes = fread(buf.data(), 1, buf.size(), f)) > 0) {
-        send(client_sock, buf.data(), read_bytes, 0);
+        size_t sent = 0;
+        while (sent < read_bytes) {
+            int n = send(client_sock, buf.data() + sent, read_bytes - sent, 0);
+            if (n <= 0) break;
+            sent += static_cast<size_t>(n);
+        }
+        // Небольшая уступка планировщику, чтобы не душить другие задачи
         vTaskDelay(pdMS_TO_TICKS(1));
     }
     fclose(f);

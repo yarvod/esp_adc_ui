@@ -60,14 +60,46 @@ class EspAdc(BaseInstrument):
     def delete_file(self, file: str):
         return self.query(f"delete={file}")
 
-    def download_file(self, file: str):
+    def download_file(self, file: str, on_progress=None, chunk_size: int = 65536):
+        """Скачать файл по TCP с прогрессом-колбэком (байты_скачано, всего_байт). Возвращает (ok, msg)."""
+
         self.write(f"hostFile=/{file}")
-        with open(file, "wb") as file:
+
+        def _recv_line(sock) -> str:
+            buf = bytearray()
             while True:
-                data = self.adapter.socket.recv(1024)
-                if not data:
-                    return f"File {file} downloaded"
-                file.write(data)
+                ch = sock.recv(1)
+                if not ch:
+                    break
+                if ch == b"\n":
+                    break
+                buf.extend(ch)
+            return buf.decode("ascii", errors="ignore")
+
+        header = _recv_line(self.adapter.socket)
+        if header.startswith("Error") or not header.startswith("SIZE "):
+            return False, (header or "Error: no header")
+
+        try:
+            total_size = int(header.split()[1])
+        except (IndexError, ValueError):
+            return False, f"Invalid header: {header}"
+
+        downloaded = 0
+        dest_path = file
+        with open(dest_path, "wb") as f_out:
+            while downloaded < total_size:
+                chunk = self.adapter.socket.recv(min(chunk_size, total_size - downloaded))
+                if not chunk:
+                    break
+                f_out.write(chunk)
+                downloaded += len(chunk)
+                if callable(on_progress):
+                    on_progress(downloaded, total_size)
+
+        if downloaded != total_size:
+            return False, f"Download incomplete: {downloaded}/{total_size} bytes"
+        return True, f"File {file} downloaded ({downloaded} bytes)"
 
     def init_sd(self):
         return self.query("initSD")

@@ -35,6 +35,7 @@ class DeleteThread(QThread):
 
 class DownloadThread(QThread):
     log = pyqtSignal(dict)
+    progress = pyqtSignal(int, int)  # downloaded, total
 
     def __init__(self, file: str, parent):
         self.file = file
@@ -44,12 +45,15 @@ class DownloadThread(QThread):
         try:
             assert State.adapter == SOCKET, "Download use only Socket"
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
-                response = daq.download_file(self.file)
-                log_type = "error" if "Error" in response else "info"
+                ok, response = daq.download_file(self.file, on_progress=self._emit_progress)
+                log_type = "error" if not ok else "info"
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
         self.finished.emit()
+
+    def _emit_progress(self, downloaded: int, total: int):
+        self.progress.emit(downloaded, total)
 
 
 class GetFilesThread(QThread):
@@ -128,6 +132,28 @@ class SdData(QtWidgets.QWidget, LogMixin):
     def download_file(self, file: str, ind: int):
         self.thread_download = DownloadThread(parent=self, file=file)
         btn_download = getattr(self, f"btn_download_{ind}")
+        progress_dialog = QtWidgets.QProgressDialog(f"Downloading {file}...", "Cancel", 0, 100, self)
+        progress_dialog.setWindowTitle("Download")
+        progress_dialog.setAutoClose(True)
+        progress_dialog.setAutoReset(True)
+        progress_dialog.setMinimumDuration(0)
+        progress_dialog.setValue(0)
+
+        def on_progress(downloaded: int, total: int):
+            if total <= 0:
+                progress_dialog.setLabelText(f"Downloading {file}: {downloaded} bytes")
+                return
+            percent = int(downloaded * 100 / total)
+            mb_done = downloaded / (1024 * 1024)
+            mb_total = total / (1024 * 1024)
+            progress_dialog.setValue(percent)
+            progress_dialog.setLabelText(f"{file}: {percent}% ({mb_done:.2f}/{mb_total:.2f} MB)")
+            if progress_dialog.wasCanceled():
+                self.thread_download.terminate()
+                progress_dialog.close()
+
+        self.thread_download.progress.connect(on_progress)
+        self.thread_download.finished.connect(progress_dialog.close)
         self.thread_download.finished.connect(lambda: btn_download.setEnabled(True))
         self.thread_download.log.connect(self.set_log)
         self.thread_download.start()
