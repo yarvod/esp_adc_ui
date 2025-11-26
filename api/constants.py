@@ -1,10 +1,9 @@
 from typing import Literal
 
 
-SERIAL = "Serial"
 SOCKET = "Socket"
+SERIAL = "Serial"  # left for backward compatibility
 ADAPTERS = {
-    SERIAL: "api.SerialAdapter",
     SOCKET: "api.SocketAdapter",
 }
 

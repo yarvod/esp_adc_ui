@@ -40,14 +40,19 @@ class CheckIPThread(QThread):
     ip = pyqtSignal(str)
     log = pyqtSignal(dict)
 
-    def __init__(self, parent):
+    def __init__(self, parent, mac: str):
         super().__init__(parent)
+        self.mac = mac
 
     def run(self):
         try:
-            ip = "Undefined"
-            with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
-                ip = daq.get_ip()
+            from api.utils import find_ip_by_mac
+
+            ip = find_ip_by_mac(self.mac)
+            if not ip:
+                self.ip.emit("Undefined")
+                self.log.emit({"type": "error", "msg": f"IP not found for MAC {self.mac}"})
+            else:
                 self.ip.emit(ip)
                 self.log.emit({"type": "info", "msg": f"IP is {ip}"})
         except Exception as e:
@@ -77,6 +82,9 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         self.pwd = QtWidgets.QLineEdit(self)
         self.pwd.setText(f"{State.pwd}")
 
+        self.mac = QtWidgets.QLineEdit(self)
+        self.mac.setText(State.mac)
+
         self.ip = QtWidgets.QLabel("Undefined", self)
 
         self.btn_setup = QtWidgets.QPushButton("Set Up WiFi", self)
@@ -88,6 +96,7 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         layout.addRow("wifi:", self.wifi)
         layout.addRow("ssid:", self.ssid)
         layout.addRow("pwd:", self.pwd)
+        layout.addRow("mac:", self.mac)
         layout.addRow("IP:", self.ip)
         layout.addRow(self.btn_setup)
         layout.addRow(self.btn_check_ip)
@@ -107,7 +116,8 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         self.btn_setup.setEnabled(False)
 
     def check_ip(self):
-        self.thread_check_ip = CheckIPThread(parent=self)
+        State.mac = self.mac.text()
+        self.thread_check_ip = CheckIPThread(parent=self, mac=State.mac)
         self.thread_check_ip.finished.connect(lambda: self.btn_check_ip.setEnabled(True))
         self.thread_check_ip.ip.connect(self.ip.setText)
         self.thread_check_ip.log.connect(self.set_log)

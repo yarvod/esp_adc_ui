@@ -4,7 +4,7 @@ from typing import Union
 
 from PyQt5.QtCore import QSettings
 
-from api.constants import SERIAL, WIFI_TYPES, WIFI, GAIN_TYPES
+from api.constants import SOCKET, WIFI_TYPES, WIFI, GAIN_TYPES
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +16,10 @@ class State:
     else:
         settings = QSettings("settings.ini", QSettings.Format.IniFormat)
 
-    adapter: str = settings.value("Init/adapter", SERIAL)
+    adapter: str = settings.value("Init/adapter", SOCKET)
     host: str = settings.value("Init/host", "")
     port: Union[int, str] = settings.value("Init/port", "COM9")
+    mac: str = settings.value("Init/mac", "10:06:1c:a6:b1:94")
 
     wifi: WIFI_TYPES = settings.value("WIFI/wifi", WIFI[0])
     ssid: str = settings.value("WIFI/ssid", "esp")
@@ -38,6 +39,7 @@ class State:
         cls.settings.setValue("Init/adapter", cls.adapter)
         cls.settings.setValue("Init/host", cls.host)
         cls.settings.setValue("Init/port", cls.port)
+        cls.settings.setValue("Init/mac", cls.mac)
 
         cls.settings.setValue("WIFI/wifi", cls.wifi)
         cls.settings.setValue("WIFI/ssid", cls.ssid)
