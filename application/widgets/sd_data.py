@@ -48,6 +48,7 @@ class DownloadThread(QThread):
             assert State.adapter == SOCKET, "Download use only Socket"
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
                 target_path = os.path.join(self.target_dir, os.path.basename(self.file))
+                self.log.emit({"type": "info", "msg": f"Downloading to {target_path}"})
                 ok, response = daq.download_file(
                     self.file,
                     on_progress=self._emit_progress,

@@ -85,7 +85,13 @@ class EspAdc(BaseInstrument):
     def download_file(self, file: str, on_progress=None, chunk_size: int = 256 * 1024, dest_path: str = None):
         """Скачать файл по TCP с прогрессом-колбэком (байты_скачано, всего_байт). Возвращает (ok, msg)."""
 
-        self.write(f"hostFile=/{file}")
+        # Прошивка отклоняет имена с ведущим '/', поэтому используем только базовое имя
+        file_name = file.lstrip("/\\")
+        file_name = file_name.rsplit("/", 1)[-1]
+        if not file_name:
+            return False, "Invalid filename"
+
+        self.write(f"hostFile={file_name}")
         # ускоряем передачу: отключаем Nagle и увеличиваем буфер приёма, если возможно
         try:
             self.adapter.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
