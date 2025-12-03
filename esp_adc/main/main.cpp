@@ -7,6 +7,7 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <string>
+#include <sstream>
 #include <sys/stat.h>
 #include <sys/unistd.h>
 #include <vector>
@@ -41,8 +42,10 @@ static const char *TAG = "esp_adc";
 
 // --- Configuration constants ---
 constexpr char MAC_ADDRESS[] = "10:06:1c:a6:b1:94";
-constexpr char WIFI_SSID_DEFAULT[] = "esp";
-constexpr char WIFI_PASSWORD_DEFAULT[] = "12345678";
+constexpr char WIFI_SSID_DEFAULT[] = "Altai INASAN";
+constexpr char WIFI_PASSWORD_DEFAULT[] = "89852936257";
+constexpr char WIFI_AP_FALLBACK_SSID[] = "esp";
+constexpr char WIFI_AP_FALLBACK_PWD[] = "12345678";
 constexpr uint32_t WIFI_CONNECT_TIMEOUT_MS = 30000;
 constexpr uint16_t SERVER_PORT = 80;
 constexpr int SD_CS_PIN = 5;
@@ -161,10 +164,32 @@ static std::string sanitize_filename(const std::string &in) {
     return out;
 }
 
+static bool is_valid_filename(const std::string &name) {
+    if (name.empty() || name.size() > MAX_FILENAME_LEN) return false;
+    return sanitize_filename(name) == name;
+}
+
 static std::string ip_to_string(const esp_netif_ip_info_t &ip) {
     char buf[16];
     snprintf(buf, sizeof(buf), IPSTR, IP2STR(&ip.ip));
     return std::string(buf);
+}
+
+static std::string query_value(const std::string &path, const std::string &key) {
+    const size_t qpos = path.find('?');
+    if (qpos == std::string::npos) return {};
+    size_t pos = qpos + 1;
+    while (pos < path.size()) {
+        const size_t eq = path.find('=', pos);
+        if (eq == std::string::npos) break;
+        const size_t amp = path.find('&', eq);
+        const std::string k = path.substr(pos, eq - pos);
+        const std::string v = path.substr(eq + 1, (amp == std::string::npos) ? std::string::npos : amp - (eq + 1));
+        if (k == key) return v;
+        if (amp == std::string::npos) break;
+        pos = amp + 1;
+    }
+    return {};
 }
 
 // ======================= NVS (preferences) ============================
@@ -548,11 +573,16 @@ static void flush_buffer_to_sd() {
     xSemaphoreGive(sd_mutex);
 }
 
-static std::string list_files() {
-    if (!sd_mounted) return "Error: SD card not initialized";
+struct FileInfo {
+    std::string name;
+    long long size = 0;
+};
+
+static std::vector<FileInfo> list_files_info() {
+    std::vector<FileInfo> files;
+    if (!sd_mounted) return files;
     DIR *dir = opendir(MOUNT_POINT);
-    if (!dir) return "Error: Failed to open directory";
-    std::string result;
+    if (!dir) return files;
     // фильтруем типичные системные/longname сервисные файлы
     const char *skip_prefixes[] = {"System Volume Information", "SYSTEM~", "FSEVE~", "SPOTL~", "TRASH~"};
     struct dirent *entry;
@@ -564,20 +594,39 @@ static std::string list_files() {
         }
         if (skip) continue;
         std::string fname = entry->d_name;
+        if (!is_valid_filename(fname)) continue;
         std::string path = std::string(MOUNT_POINT) + "/" + fname;
         struct stat st{};
         if (stat(path.c_str(), &st) == 0) {
-            char buf[128];
-            // формат: имя:байты;
-            snprintf(buf, sizeof(buf), "%s:%lld;", fname.c_str(), static_cast<long long>(st.st_size));
-            result += buf;
-        } else {
-            result += fname;
-            result.push_back(';');
+            files.push_back({fname, static_cast<long long>(st.st_size)});
         }
     }
     closedir(dir);
+    return files;
+}
+
+static std::string list_files() {
+    if (!sd_mounted) return "Error: SD card not initialized";
+    std::string result;
+    for (const auto &f : list_files_info()) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%s:%lld;", f.name.c_str(), f.size);
+        result += buf;
+    }
     return result;
+}
+
+static std::string list_files_json() {
+    std::ostringstream oss;
+    oss << "[";
+    bool first = true;
+    for (const auto &f : list_files_info()) {
+        if (!first) oss << ",";
+        first = false;
+        oss << "{\"name\":\"" << f.name << "\",\"size\":" << f.size << "}";
+    }
+    oss << "]";
+    return oss.str();
 }
 
 static std::string delete_file(const std::string &file_name) {
@@ -592,41 +641,52 @@ static std::string delete_file(const std::string &file_name) {
     return "Error: File " + file_name + " not found";
 }
 
-static void host_file(int client_sock, const std::string &file_name) {
+static bool send_file(int client_sock, const std::string &file_name, bool http_mode) {
     if (!sd_mounted) {
-        const char *msg = "Error: SD not mounted\n";
+        const char *msg = http_mode ? "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n\r\nSD not mounted"
+                                    : "Error: SD not mounted\n";
         send(client_sock, msg, strlen(msg), 0);
-        return;
+        return false;
     }
-    // Сброс буфера, чтобы файл содержал свежие данные записи
+    if (!is_valid_filename(file_name)) {
+        const char *msg = http_mode ? "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 17\r\n\r\nInvalid filename"
+                                    : "Error: Invalid filename\n";
+        send(client_sock, msg, strlen(msg), 0);
+        return false;
+    }
     if (is_recording && current_file_name == file_name) {
         flush_buffer_to_sd();
     }
     const std::string path = std::string(MOUNT_POINT) + "/" + file_name;
     struct stat st = {};
     if (stat(path.c_str(), &st) != 0 || st.st_size < 0) {
-        const std::string msg = "Error: File not found\n";
-        send(client_sock, msg.c_str(), msg.size(), 0);
-        return;
+        const char *msg = http_mode ? "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nNot found"
+                                    : "Error: File not found\n";
+        send(client_sock, msg, strlen(msg), 0);
+        return false;
     }
     FILE *f = nullptr;
-    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    if (xSemaphoreTake(sd_mutex, pdMS_TO_TICKS(500)) == pdTRUE) {
         f = fopen(path.c_str(), "rb");
-        xSemaphoreGive(sd_mutex); // отпускаем сразу после открытия
-    }
-    if (!f) {
-        const char *msg = "Error: SD busy or failed to open\n";
-        send(client_sock, msg, strlen(msg), 0);
-        return;
-    }
-    if (!f) {
-        const std::string msg = "Error: Failed to open file " + file_name + "\n";
-        send(client_sock, msg.c_str(), msg.size(), 0);
         xSemaphoreGive(sd_mutex);
-        return;
     }
-    // Отправляем размер, чтобы клиент мог показать прогресс
-    {
+    if (!f) {
+        const char *msg = http_mode ? "HTTP/1.1 423 Locked\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nSD in use"
+                                    : "Error: SD busy or failed to open\n";
+        send(client_sock, msg, strlen(msg), 0);
+        return false;
+    }
+    if (http_mode) {
+        char hdr[256];
+        int hdr_len = snprintf(hdr, sizeof(hdr),
+                               "HTTP/1.1 200 OK\r\n"
+                               "Content-Type: application/octet-stream\r\n"
+                               "Content-Length: %lld\r\n"
+                               "Content-Disposition: attachment; filename=\"%s\"\r\n"
+                               "\r\n",
+                               static_cast<long long>(st.st_size), file_name.c_str());
+        send(client_sock, hdr, hdr_len, 0);
+    } else {
         char header[64];
         int hdr_len = snprintf(header, sizeof(header), "SIZE %lld\n", static_cast<long long>(st.st_size));
         send(client_sock, header, hdr_len, 0);
@@ -644,6 +704,47 @@ static void host_file(int client_sock, const std::string &file_name) {
         }
     }
     fclose(f);
+    return true;
+}
+
+static void host_file(int client_sock, const std::string &file_name) {
+    send_file(client_sock, file_name, false);
+}
+
+static bool handle_http_request(int client_sock, const std::string &request_line) {
+    if (request_line.rfind("GET ", 0) != 0) return false;
+    const size_t path_start = 4;
+    const size_t path_end = request_line.find(' ', path_start);
+    if (path_end == std::string::npos) return false;
+    const std::string path = request_line.substr(path_start, path_end - path_start);
+
+    if (path.rfind("/files", 0) == 0) {
+        std::string body = list_files_json();
+        if (!sd_mounted) {
+            const char *resp = "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\nContent-Length: 14\r\n\r\nSD not ready\n";
+            send(client_sock, resp, strlen(resp), 0);
+            return true;
+        }
+        char hdr[128];
+        int hdr_len = snprintf(hdr, sizeof(hdr),
+                               "HTTP/1.1 200 OK\r\n"
+                               "Content-Type: application/json\r\n"
+                               "Content-Length: %zu\r\n"
+                               "Cache-Control: no-store\r\n"
+                               "\r\n",
+                               body.size());
+        send(client_sock, hdr, hdr_len, 0);
+        send(client_sock, body.c_str(), body.size(), 0);
+        return true;
+    }
+
+    if (path.rfind("/download", 0) == 0) {
+        const std::string file = query_value(path, "file");
+        send_file(client_sock, file, true);
+        return true;
+    }
+
+    return false;
 }
 
 // ======================= Wi-Fi =======================================
@@ -671,9 +772,9 @@ static esp_err_t start_wifi(const WifiSettings &settings) {
 
     wifi_mode_t mode = (settings.mode == "other") ? WIFI_MODE_STA : WIFI_MODE_AP;
     if (mode == WIFI_MODE_STA) {
-        sta_netif = esp_netif_create_default_wifi_sta();
+        if (!sta_netif) sta_netif = esp_netif_create_default_wifi_sta();
     } else {
-        ap_netif = esp_netif_create_default_wifi_ap();
+        if (!ap_netif) ap_netif = esp_netif_create_default_wifi_ap();
     }
 
     wifi_config_t wifi_config = {};
@@ -706,6 +807,26 @@ static esp_err_t start_wifi(const WifiSettings &settings) {
         EventBits_t bits = xEventGroupWaitBits(wifi_event_group, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(WIFI_CONNECT_TIMEOUT_MS));
         if (!(bits & WIFI_CONNECTED_BIT)) {
             ESP_LOGW(TAG, "WiFi STA connection timeout");
+            ESP_LOGW(TAG, "Starting fallback AP '%s'", WIFI_AP_FALLBACK_SSID);
+            ESP_ERROR_CHECK(esp_wifi_stop());
+            wifi_mode = "own";
+            if (!ap_netif) ap_netif = esp_netif_create_default_wifi_ap();
+            wifi_config_t ap_config = {};
+            strncpy(reinterpret_cast<char *>(ap_config.ap.ssid), WIFI_AP_FALLBACK_SSID, sizeof(ap_config.ap.ssid) - 1);
+            ap_config.ap.ssid_len = static_cast<uint8_t>(strlen(reinterpret_cast<const char *>(ap_config.ap.ssid)));
+            if (strlen(WIFI_AP_FALLBACK_PWD) < 8) {
+                ap_config.ap.authmode = WIFI_AUTH_OPEN;
+                ap_config.ap.password[0] = '\0';
+            } else {
+                strncpy(reinterpret_cast<char *>(ap_config.ap.password), WIFI_AP_FALLBACK_PWD, sizeof(ap_config.ap.password) - 1);
+                ap_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+            }
+            ap_config.ap.max_connection = 4;
+            ap_config.ap.channel = 1;
+            ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
+            ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap_config));
+            ESP_ERROR_CHECK(esp_wifi_start());
+            xEventGroupWaitBits(wifi_event_group, WIFI_READY_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
         }
     } else {
         xEventGroupWaitBits(wifi_event_group, WIFI_READY_BIT, pdFALSE, pdFALSE, pdMS_TO_TICKS(2000));
@@ -948,7 +1069,9 @@ static void wifi_command_task(void *param) {
         while (true) {
             std::string request;
             if (!recv_line(client_sock, request)) break;
-            if (request.rfind("hostFile=", 0) == 0) {
+            if (handle_http_request(client_sock, request)) {
+                break; // HTTP responses close connection after handling
+            } else if (request.rfind("hostFile=", 0) == 0) {
                 host_file(client_sock, request.substr(9));
                 break; // close after sending file
             } else {
