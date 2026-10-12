@@ -66,6 +66,10 @@ class ThermostatUiTests(unittest.TestCase):
                 with open(widget.result["csv"], newline="") as stream:
                     self.assertEqual(len(list(csv.reader(stream))), 622)
                 image = QtGui.QImage(widget.result["png"])
+                if os.environ.get("TEST_ARTIFACT_DIR"):
+                    artifacts = Path(os.environ["TEST_ARTIFACT_DIR"])
+                    artifacts.mkdir(parents=True, exist_ok=True)
+                    image.save(str(artifacts / "thermostat-export.png"))
                 self.assertFalse(image.isNull())
                 self.assertEqual(image.width(), 1200)
                 self.assertGreater(image.height(), 500)

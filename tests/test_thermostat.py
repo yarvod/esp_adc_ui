@@ -110,7 +110,7 @@ class ThermostatTests(unittest.TestCase):
             with open(result["csv"], newline="") as stream:
                 self.assertEqual(len(list(csv.reader(stream))), 6)
             self.assertEqual(result["T"], [20, 31.5, 30, 29, 30])
-            self.assertIn("Всего точек: 5", Path(result["stats"]).read_text())
+            self.assertIn("Всего точек: 5", Path(result["stats"]).read_text(encoding="utf-8"))
 
     def test_monitor_only_does_not_control_heater_or_fan(self):
         device = FakeSerial("fake", 115200, 0.2, 0.5, readings=(31.5, 30, 29, 30))
