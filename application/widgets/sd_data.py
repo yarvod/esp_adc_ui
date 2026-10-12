@@ -5,7 +5,7 @@ import threading
 from typing import List
 
 from PyQt5 import QtWidgets
-from PyQt5.QtCore import QThread, pyqtSignal
+from PyQt5.QtCore import QThread, Qt, pyqtSignal
 
 from api import EspAdc
 from api.exceptions import DownloadCancelled
@@ -91,6 +91,7 @@ class SdData(QtWidgets.QWidget, LogMixin):
     def __init__(self, parent):
         super().__init__(parent)
         self.logger = logger
+        self.file_rows = []
         layout = QtWidgets.QVBoxLayout()
 
         hlayout_buttons = QtWidgets.QHBoxLayout()
@@ -99,12 +100,19 @@ class SdData(QtWidgets.QWidget, LogMixin):
         self.scroll_files.setWidgetResizable(True)
         self.scroll_files_content = QtWidgets.QWidget()
         self.glayout_files = QtWidgets.QGridLayout(self.scroll_files_content)
+        self.glayout_files.setAlignment(Qt.AlignTop)
         self.scroll_files.setWidget(self.scroll_files_content)
 
         self.btn_get_files = QtWidgets.QPushButton("Get files list", self)
         self.btn_get_files.clicked.connect(self.get_files)
+        self.file_filter = QtWidgets.QLineEdit(self)
+        self.file_filter.setPlaceholderText("Фильтр по имени файла")
+        self.file_filter.setClearButtonEnabled(True)
+        self.file_filter.setToolTip("Файлы отсортированы по имени: самые свежие сверху")
+        self.file_filter.textChanged.connect(self.filter_files)
 
         hlayout_buttons.addWidget(self.btn_get_files)
+        hlayout_buttons.addWidget(self.file_filter, 1)
 
         layout.addLayout(hlayout_buttons)
         layout.addWidget(self.scroll_files)
@@ -122,6 +130,7 @@ class SdData(QtWidgets.QWidget, LogMixin):
         self.btn_get_files.setEnabled(False)
 
     def set_files_list(self, files: List[dict]):
+        self.file_rows = []
         # Очистка макета перед добавлением новых элементов
         while self.glayout_files.count():
             child = self.glayout_files.takeAt(0)
@@ -129,7 +138,14 @@ class SdData(QtWidgets.QWidget, LogMixin):
                 child.widget().deleteLater()
 
         skip_prefixes = ("SYSTEM~", "FSEVE~", "SPOTL~", "TRASH~")
-        for i, file_info in enumerate(files):
+        # Device filenames contain YYYYMMDD_HHMMSS, so descending name order
+        # puts recent recordings first without changing the firmware/API.
+        ordered = sorted(
+            files,
+            key=lambda info: (info.get("name") or "").casefold() if isinstance(info, dict) else info.casefold(),
+            reverse=True,
+        )
+        for i, file_info in enumerate(ordered):
             file = file_info.get("name") if isinstance(file_info, dict) else file_info
             size = file_info.get("size", -1) if isinstance(file_info, dict) else -1
             if (
@@ -146,9 +162,21 @@ class SdData(QtWidgets.QWidget, LogMixin):
             btn_delete.clicked.connect(partial(self.delete_file, file, i))
             setattr(self, f"btn_delete_{i}", btn_delete)
             size_mb = f"{size / (1024 * 1024):.2f} MB" if size and size > 0 else "N/A"
-            self.glayout_files.addWidget(QtWidgets.QLabel(f"{file} ({size_mb})", self), i, 0)
+            label = QtWidgets.QLabel(f"{file} ({size_mb})", self)
+            self.glayout_files.addWidget(label, i, 0)
             self.glayout_files.addWidget(btn_download, i, 1)
             self.glayout_files.addWidget(btn_delete, i, 2)
+            self.file_rows.append((file, (label, btn_download, btn_delete)))
+        self.filter_files()
+
+    def filter_files(self):
+        query = self.file_filter.text().strip().casefold()
+        # Hide existing rows instead of recreating buttons: an active download
+        # keeps the same button and callbacks when the filter changes.
+        for name, widgets in self.file_rows:
+            visible = query in name.casefold()
+            for widget in widgets:
+                widget.setVisible(visible)
 
     def download_file(self, file: str, ind: int):
         target_dir = QtWidgets.QFileDialog.getExistingDirectory(self, "Select folder to save")
