@@ -5,7 +5,7 @@ from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from api import EspAdc
-from api.constants import WIFI_TYPES, WIFI
+from api.constants import WIFI_TYPES, WIFI, WIFI_LABELS, DEVICE_MAC, DEVICE_AP_MAC
 
 from store.state import State
 
@@ -33,7 +33,6 @@ class SetUpWifiThread(QThread):
                 self.log.emit({"type": "info", "msg": f"Wifi {self.wifi} {self.ssid} is Set up"})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class CheckIPThread(QThread):
@@ -57,7 +56,6 @@ class CheckIPThread(QThread):
                 self.log.emit({"type": "info", "msg": f"IP is {ip}"})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class SetUpWifiGroup(QtWidgets.QGroupBox):
@@ -73,8 +71,11 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         layout = QtWidgets.QFormLayout()
 
         self.wifi = QtWidgets.QComboBox(self)
-        self.wifi.addItems(WIFI)
-        self.wifi.setCurrentText(State.wifi)
+        for mode in WIFI:
+            self.wifi.addItem(WIFI_LABELS[mode], mode)
+        self.wifi.setCurrentIndex(max(0, self.wifi.findData(State.wifi)))
+        self.wifi.setSizeAdjustPolicy(QtWidgets.QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.wifi.setMinimumContentsLength(12)
 
         self.ssid = QtWidgets.QLineEdit(self)
         self.ssid.setText(State.ssid)
@@ -94,19 +95,26 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         self.btn_check_ip.clicked.connect(self.check_ip)
 
         layout.addRow("wifi:", self.wifi)
-        layout.addRow("ssid:", self.ssid)
-        layout.addRow("pwd:", self.pwd)
+        self.ssid_label = QtWidgets.QLabel(self)
+        self.pwd_label = QtWidgets.QLabel(self)
+        layout.addRow(self.ssid_label, self.ssid)
+        layout.addRow(self.pwd_label, self.pwd)
         layout.addRow("mac:", self.mac)
         layout.addRow("IP:", self.ip)
         layout.addRow(self.btn_setup)
         layout.addRow(self.btn_check_ip)
+        self.mode_note = QtWidgets.QLabel(self)
+        self.mode_note.setWordWrap(True)
+        layout.addRow(self.mode_note)
+        self.wifi.currentIndexChanged.connect(self.update_mode_note)
+        self.update_mode_note()
 
         self.setLayout(layout)
 
     def setup_wifi(self):
         self.thread_setup_wifi = SetUpWifiThread(
             parent=self,
-            wifi=self.wifi.currentText(),
+            wifi=self.wifi.currentData(),
             ssid=self.ssid.text(),
             pwd=self.pwd.text(),
         )
@@ -114,6 +122,21 @@ class SetUpWifiGroup(QtWidgets.QGroupBox):
         self.thread_setup_wifi.log.connect(self.set_log)
         self.thread_setup_wifi.start()
         self.btn_setup.setEnabled(False)
+
+    def update_mode_note(self):
+        mode = self.wifi.currentData()
+        self.ssid_label.setText("SSID ESP:" if mode == "own" else "SSID роутера:")
+        self.pwd_label.setText("Пароль ESP:" if mode == "own" else "Пароль роутера:")
+        self.mode_note.setText(
+            "ESP создаёт сеть esp (пароль 12345678) и одновременно подключается к указанному роутеру."
+            if mode == "both"
+            else "ESP создаёт собственную сеть с указанными именем и паролем."
+            if mode == "own"
+            else "ESP подключается к указанному роутеру; при ошибке создаёт резервную сеть esp."
+        )
+        self.mac.setToolTip(f"Заводские MAC этой ESP32: роутер (STA) — {DEVICE_MAC}; сеть ESP (AP) — {DEVICE_AP_MAC}.")
+        if self.mac.text() in (DEVICE_MAC, DEVICE_AP_MAC):
+            self.mac.setText(DEVICE_AP_MAC if mode == "own" else DEVICE_MAC)
 
     def check_ip(self):
         State.mac = self.mac.text()

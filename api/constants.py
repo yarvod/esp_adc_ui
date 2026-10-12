@@ -1,10 +1,11 @@
 from typing import Literal
 
 
-SOCKET = "Socket"
-SERIAL = "Serial"  # left for backward compatibility
+HTTP = "HTTP"
+DEVICE_MAC = "68:09:47:9f:21:2c"
+DEVICE_AP_MAC = "68:09:47:9f:21:2d"
 ADAPTERS = {
-    SOCKET: "api.SocketAdapter",
+    HTTP: "api.HttpAdapter",
 }
 
 GAIN_TYPES = Literal[0, 1, 2, 3, 4, 5]
@@ -17,5 +18,10 @@ GAINS = {
     5: "+/- 0.256 V",
 }
 
-WIFI_TYPES = Literal["own", "other"]
-WIFI = ["own", "other"]
+WIFI_TYPES = Literal["own", "other", "both"]
+WIFI = ["own", "other", "both"]
+WIFI_LABELS = {
+    "own": "Собственная сеть",
+    "other": "Подключение к роутеру",
+    "both": "Сеть ESP + роутер",
+}

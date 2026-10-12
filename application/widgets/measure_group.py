@@ -6,6 +6,7 @@ from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import pyqtSignal
 
 from api import EspAdc
+from api.exceptions import DeviceApiError
 from store.state import State
 
 logger = logging.getLogger(__name__)
@@ -15,6 +16,7 @@ class MeasureThread(QtCore.QThread):
     finished = pyqtSignal(int)
     data_plot = pyqtSignal(list)
     log = pyqtSignal(dict)
+    clock_changed = pyqtSignal()
 
     def __init__(self, parent, rps: int):
         super().__init__(parent)
@@ -25,19 +27,53 @@ class MeasureThread(QtCore.QThread):
         try:
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
                 self.log.emit({"type": "info", "msg": "Device Connected!"})
-                start = time.time()
+                first_timestamp = None
+                started = time.monotonic()
+                previous_timestamp = None
+                previous_read = None
+                unavailable_since = None
                 while State.is_measuring:
+                    if time.monotonic() - started >= self.duration:
+                        State.is_measuring = False
+                        break
                     data_plot = []
                     time.sleep(1 / self.rps)
-                    data = daq.read_data()
-                    if data:
-                        duration = time.time() - start
-                        a0, a1, a2 = data
-                        data_plot.append({"channel": 1, "voltage": a0, "time": duration})
-                        data_plot.append({"channel": 2, "voltage": a1, "time": duration})
-                        data_plot.append({"channel": 3, "voltage": a2, "time": duration})
-                        if duration > self.duration:
-                            State.is_measuring = False
+                    try:
+                        timestamp_ms, data = daq.read_sample()
+                    except DeviceApiError as exc:
+                        if exc.status != 503 or exc.code != "not_ready":
+                            raise
+                        if unavailable_since is None:
+                            unavailable_since = time.monotonic()
+                        if time.monotonic() - unavailable_since >= 2:
+                            status = daq.get_status()
+                            if not status["adc_ready"] or not status["rtc_ready"]:
+                                raise
+                            # A long averaging window legitimately has no completed point yet.
+                            unavailable_since = time.monotonic()
+                        continue
+                    unavailable_since = None
+                    read_at = time.monotonic()
+                    if timestamp_ms == previous_timestamp:
+                        continue  # Polling can be faster than acquisition; only plot new points.
+                    if first_timestamp is None:
+                        first_timestamp = timestamp_ms
+                    elif (
+                        timestamp_ms < previous_timestamp
+                        or abs((timestamp_ms - previous_timestamp) / 1000 - (read_at - previous_read)) > 2
+                    ):
+                        first_timestamp = timestamp_ms
+                        self.clock_changed.emit()
+                        self.log.emit({"type": "info", "msg": "RTC time updated; plot timer restarted"})
+                    previous_timestamp = timestamp_ms
+                    previous_read = read_at
+                    duration = (timestamp_ms - first_timestamp) / 1000
+                    for channel, voltage in enumerate(data, 1):
+                        data_plot.append(
+                            {"channel": channel, "voltage": voltage, "time": duration, "timestamp_ms": timestamp_ms}
+                        )
+                    if time.monotonic() - started >= self.duration:
+                        State.is_measuring = False
                     if data_plot:
                         self.data_plot.emit(data_plot)
         except Exception as e:
@@ -51,9 +87,11 @@ class MeasureThread(QtCore.QThread):
 
 
 class MeasureGroup(QtWidgets.QGroupBox):
-    def __init__(self, parent):
+    def __init__(self, parent, plot_widget=None, monitor_widget=None):
         super().__init__(parent)
         self.thread_measure = None
+        self.plot_widget = plot_widget
+        self.monitor_widget = monitor_widget
         self.setTitle("Monitor")
 
         vlayout = QtWidgets.QVBoxLayout()
@@ -84,7 +122,7 @@ class MeasureGroup(QtWidgets.QGroupBox):
 
         flayout.setLabelAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
         flayout.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignLeft)
-        flayout.addRow("Measuring Time, s:", self.duration)
+        flayout.addRow("Monitor Time, s:", self.duration)
         flayout.addRow("RpS:", self.rps)
         flayout.addRow(self.is_plot_data, self.plot_window)
 
@@ -101,14 +139,15 @@ class MeasureGroup(QtWidgets.QGroupBox):
         self.setLayout(vlayout)
 
     def start_measure(self):
-        parent = self.parent()
-        if hasattr(parent, "plot_widget"):
-            parent.plot_widget.clear()
-        if hasattr(parent, "monitor_widget"):
-            parent.monitor_widget.reset_values()
+        if self.plot_widget is not None:
+            self.plot_widget.clear()
+        if self.monitor_widget is not None:
+            self.monitor_widget.reset_values()
         self.thread_measure = MeasureThread(self, rps=self.rps.value())
         self.thread_measure.data_plot.connect(self.plot_data)
         self.thread_measure.log.connect(self.set_log)
+        if self.plot_widget is not None:
+            self.thread_measure.clock_changed.connect(self.plot_widget.clear)
         self.btn_start.setEnabled(False)
         self.thread_measure.finished.connect(self.finish_measure)
         State.is_measuring = True
@@ -121,6 +160,7 @@ class MeasureGroup(QtWidgets.QGroupBox):
         State.is_measuring = False
 
     def finish_measure(self, code: int = 0):
+        State.is_measuring = False
         self.btn_start.setEnabled(True)
         if code == 0:
             logger.info("Measure finished successfully!")
@@ -128,11 +168,10 @@ class MeasureGroup(QtWidgets.QGroupBox):
             logger.error("Measure finished due to Error!")
 
     def plot_data(self, data: list):
-        parent = self.parent()
-        if self.is_plot_data.isChecked() and hasattr(parent, "plot_widget"):
-            parent.plot_widget.add_plots(data)
-        if hasattr(parent, "monitor_widget"):
-            parent.monitor_widget.add_data(data)
+        if self.is_plot_data.isChecked() and self.plot_widget is not None:
+            self.plot_widget.add_plots(data)
+        if self.monitor_widget is not None:
+            self.monitor_widget.add_data(data)
 
     @staticmethod
     def set_duration(value):

@@ -1,15 +1,9 @@
-#! /bin/bash
-
-while getopts "t:" arg; do
-  case $arg in
-    t) Tag=$OPTARG;;
-  esac
-done
-
-# Create tags
-git commit --allow-empty -m "Release $Tag"
-git tag -a $Tag -m "Version $Tag"
-
-# Push
-git push origin --tags
-git push
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+if [[ "${1:-}" == "-t" ]]; then shift; fi
+if [[ $# -eq 0 ]]; then
+  echo 'Usage: bash release.sh [-t] v1.2.3 [--dry-run]' >&2
+  exit 2
+fi
+rtk uv run --no-project python tools/release.py "$@" --publish

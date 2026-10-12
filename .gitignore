@@ -5,3 +5,4 @@
 *dist
 *build
 *.spec
+esp_adc/main/wifi_config.local.h

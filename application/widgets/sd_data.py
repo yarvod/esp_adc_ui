@@ -1,13 +1,14 @@
 from functools import partial
 import logging
 import os
+import threading
 from typing import List
 
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
 
 from api import EspAdc
-from api.constants import SOCKET
+from api.exceptions import DownloadCancelled
 from application.mixins.log_mixin import LogMixin
 from store.state import State
 
@@ -24,14 +25,11 @@ class DeleteThread(QThread):
     def run(self):
         try:
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
-                if not self.file.startswith("/"):
-                    self.file = "/" + self.file
                 response = daq.delete_file(self.file)
                 log_type = "error" if "Error" in response else "info"
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class DownloadThread(QThread):
@@ -41,28 +39,34 @@ class DownloadThread(QThread):
     def __init__(self, file: str, target_dir: str, parent):
         self.file = file
         self.target_dir = target_dir
+        self.cancelled = threading.Event()
         super().__init__(parent)
 
     def run(self):
         try:
-            assert State.adapter == SOCKET, "Download use only Socket"
             with EspAdc(host=State.host, port=State.port, adapter=State.adapter) as daq:
                 target_path = os.path.join(self.target_dir, os.path.basename(self.file))
                 self.log.emit({"type": "info", "msg": f"Downloading to {target_path}"})
                 ok, response = daq.download_file(
                     self.file,
                     on_progress=self._emit_progress,
-                    chunk_size=128 * 1024,
+                    chunk_size=16 * 1024,
                     dest_path=target_path,
                 )
                 log_type = "error" if not ok else "info"
                 self.log.emit({"type": log_type, "msg": response})
+        except DownloadCancelled:
+            self.log.emit({"type": "info", "msg": "Download cancelled"})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
     def _emit_progress(self, downloaded: int, total: int):
+        if self.cancelled.is_set():
+            raise DownloadCancelled
         self.progress.emit(downloaded, total)
+
+    def cancel(self):
+        self.cancelled.set()
 
 
 class GetFilesThread(QThread):
@@ -81,7 +85,6 @@ class GetFilesThread(QThread):
                 self.files.emit(response)
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class SdData(QtWidgets.QWidget, LogMixin):
@@ -169,10 +172,8 @@ class SdData(QtWidgets.QWidget, LogMixin):
             mb_total = total / (1024 * 1024)
             progress_dialog.setValue(percent)
             progress_dialog.setLabelText(f"{file}: {percent}% ({mb_done:.2f}/{mb_total:.2f} MB)")
-            if progress_dialog.wasCanceled():
-                self.thread_download.terminate()
-                progress_dialog.close()
 
+        progress_dialog.canceled.connect(self.thread_download.cancel)
         self.thread_download.progress.connect(on_progress)
         self.thread_download.finished.connect(progress_dialog.close)
         self.thread_download.finished.connect(lambda: btn_download.setEnabled(True))

@@ -1,16 +1,9 @@
 @echo off
 setlocal
-
-if "%1"=="" (
-    exit /b
-) else (
-    set "Tag=%1"
+cd /d "%~dp0"
+if "%~1"=="" (
+    echo Usage: release.bat v1.2.3 [--dry-run]
+    exit /b 2
 )
-
-
-git commit --allow-empty -m "Release %Tag%"
-git tag -a %Tag% -m "Version %Tag%"
-git push origin --tags
-git push
-
-endlocal
+python tools\release.py %* --publish
+exit /b %errorlevel%

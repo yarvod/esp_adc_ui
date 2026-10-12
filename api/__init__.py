@@ -1,3 +1,2 @@
-from .serial_adapter import SerialAdapter
-from .socket_adapter import SocketAdapter
+from .http_adapter import HttpAdapter
 from .esp_adc import EspAdc

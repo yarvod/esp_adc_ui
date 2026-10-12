@@ -1,38 +1,32 @@
+import argparse
 import time
+from datetime import datetime, timezone
 
-from api import get_daq_class
-from api.structures import DAQVoltage, DAQSampleRate, DAQADCChannel
+from api import EspAdc
 
-# Example usage with context management
+
+def main():
+    parser = argparse.ArgumentParser(description="Monitor ESP32 over HTTP")
+    parser.add_argument("--host", default="192.168.4.1")
+    parser.add_argument("--port", type=int, default=80)
+    parser.add_argument("--rps", type=float, default=5)
+    args = parser.parse_args()
+    if args.rps <= 0:
+        parser.error("--rps must be positive")
+    with EspAdc(host=args.host, port=args.port) as device:
+        device.get_status()
+        try:
+            while True:
+                timestamp_ms, values = device.read_sample()
+                local = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).astimezone()
+                print(
+                    f"{local.isoformat(timespec='milliseconds')}: "
+                    + "; ".join(f"ADC{i}: {value:.1f} mV" for i, value in enumerate(values))
+                )
+                time.sleep(1 / args.rps)
+        except KeyboardInterrupt:
+            pass
+
+
 if __name__ == "__main__":
-    try:
-        DAQ122 = get_daq_class()
-        with DAQ122() as daq:
-            if daq.is_connected():
-                print("Device is connected")
-
-            if daq.configure_sampling_parameters(DAQVoltage.Voltage5V, DAQSampleRate.SampleRate500):
-                print("Sampling parameters configured")
-
-            if daq.config_adc_channel(DAQADCChannel.AIN_ALL):
-                daq.start_collection()
-                time.sleep(1)  # Wait for data to accumulate
-
-                count = 0
-                start = time.time()
-
-                while True:
-
-                    success, data = daq.read_data(read_elements_count=500, channel_number=0, timeout=5000)
-                    if success:
-                        read_data = list(data)
-                        pressure = read_data[0]
-
-                        count += 1
-                        duration = time.time() - start
-                        print(f"\r {duration:5.3f}: {pressure:8.6f}  {count} ", end="")
-                        if duration > 360:
-                            break
-
-    except (Exception, KeyboardInterrupt) as e:
-        print(f"Exception: {e}")
+    main()

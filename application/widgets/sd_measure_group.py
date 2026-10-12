@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import QThread, pyqtSignal
@@ -27,7 +26,6 @@ class StartThread(QThread):
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class StopThread(QThread):
@@ -44,7 +42,6 @@ class StopThread(QThread):
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class CheckStatusThread(QThread):
@@ -61,7 +58,6 @@ class CheckStatusThread(QThread):
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class InitSdThread(QThread):
@@ -82,7 +78,6 @@ class InitSdThread(QThread):
                 self.log.emit({"type": log_type, "msg": response})
         except Exception as e:
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
@@ -123,10 +118,9 @@ class SdMeasureGroup(QtWidgets.QGroupBox, LogMixin):
         self.setLayout(layout)
 
     def start_measure(self):
-        filename = datetime.now().strftime("data_%Y%m%d_%H%M%S.txt")
         self.thread_start = StartThread(
             parent=self,
-            file=filename,
+            file="",
         )
         self.thread_start.finished.connect(lambda: self.btn_start.setEnabled(True))
         self.thread_start.log.connect(self.set_log)

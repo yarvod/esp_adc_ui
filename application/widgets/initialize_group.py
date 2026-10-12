@@ -26,6 +26,7 @@ class InitializeThread(QThread):
     def run(self):
         try:
             with EspAdc(host=self.host, port=self.port, adapter=self.adapter) as daq:
+                daq.get_status()
                 self.status.emit("Success Connected!")
                 State.adapter = self.adapter
                 State.host = self.host
@@ -33,7 +34,6 @@ class InitializeThread(QThread):
         except Exception as e:
             self.status.emit(textwrap.shorten(str(e), width=50))
             self.log.emit({"type": "error", "msg": str(e)})
-        self.finished.emit()
 
 
 class InitializeGroup(QtWidgets.QGroupBox):
@@ -68,7 +68,7 @@ class InitializeGroup(QtWidgets.QGroupBox):
         layout.addRow(self.btnInitialize)
 
         self.setLayout(layout)
-        # only socket adapter is available
+        # HTTP uses independent requests, including during monitoring.
 
     def initialize(self):
         self.thread_initialize = InitializeThread(
@@ -82,8 +82,6 @@ class InitializeGroup(QtWidgets.QGroupBox):
         self.thread_initialize.log.connect(self.set_log)
         self.thread_initialize.start()
         self.btnInitialize.setEnabled(False)
-
-    # Serial support removed; only socket adapter remains
 
     @staticmethod
     def set_log(log: dict):

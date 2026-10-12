@@ -10,23 +10,12 @@ logger = logging.getLogger(__name__)
 
 
 class AdapterInterface:
-    """
-    This is the base interface for Instrument adapter
-    """
+    """Transport boundary for structured device operations."""
 
-    def _send(self, *args, **kwargs):
+    def request(self, method, path, body=None):
         raise NotImplementedError
 
-    def _recv(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def read(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def query(self, *args, **kwargs):
-        raise NotImplementedError
-
-    def write(self, *args, **kwargs):
+    def download(self, path, target, **kwargs):
         raise NotImplementedError
 
     def close(self):
@@ -67,18 +56,11 @@ class BaseInstrument:
 
     def _set_adapter(self) -> None:
         adapter_path = ADAPTERS.get(self.adapter_name)
+        if not adapter_path:
+            raise DeviceConnectionError("Используйте HTTP: старый TCP-протокол заменён HTTP API v1")
         try:
             adapter_class = import_class(adapter_path)
             self.adapter: AdapterInterface = adapter_class(host=self.host, port=self.port, *self.args, **self.kwargs)
         except (ImportError, ImportWarning) as e:
             logger.debug(f"[{self.__class__.__name__}._set_adapter] {e}")
             raise DeviceConnectionError
-
-    def query(self, cmd: str, **kwargs) -> str:
-        return self.adapter.query(cmd, **kwargs)
-
-    def write(self, cmd: str) -> None:
-        return self.adapter.write(cmd)
-
-    def read(self) -> str:
-        return self.adapter.read()

@@ -1,4 +1,5 @@
 from typing import List, Dict
+from datetime import datetime, timezone
 
 from PyQt5 import QtWidgets, QtCore
 
@@ -43,7 +44,11 @@ class MonitorGroup(QtWidgets.QGroupBox):
         hlayout.addLayout(glayout_timer)
         hlayout.addStretch()
 
-        self.setLayout(hlayout)
+        layout = QtWidgets.QVBoxLayout()
+        layout.addLayout(hlayout)
+        self.rtc_time = QtWidgets.QLabel("Время измерения RTC: —", self)
+        layout.addWidget(self.rtc_time)
+        self.setLayout(layout)
 
     def add_data(self, data: List[Dict]):
         for dat in data:
@@ -51,6 +56,10 @@ class MonitorGroup(QtWidgets.QGroupBox):
             ai.setText(f"<h3>{dat['voltage']:.2f}</h3>")
 
         self.timer.setText(f"<h3>{data[0]['time']:.2f}</h3>")
+        timestamp_ms = data[0].get("timestamp_ms")
+        if timestamp_ms:
+            local = datetime.fromtimestamp(timestamp_ms / 1000, timezone.utc).astimezone()
+            self.rtc_time.setText(f"Время измерения RTC: {local.strftime('%d.%m.%Y %H:%M:%S %Z')}")
 
     def reset_values(self):
         for i in range(1, 4):
@@ -58,3 +67,4 @@ class MonitorGroup(QtWidgets.QGroupBox):
             ai.setText("<h3>N\A</h3>")
 
         self.timer.setText("<h3>N\A</h3>")
+        self.rtc_time.setText("Время измерения RTC: —")

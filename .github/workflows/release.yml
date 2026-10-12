@@ -1,72 +1,112 @@
-name: Build and Release
+name: Windows CI and Release
 
 on:
   push:
-    tags:
-      - '*'
-
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
   workflow_dispatch:
 
 permissions:
-  packages: write
-  contents: write
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: ${{ matrix.os }}
-
+    runs-on: windows-2022
     strategy:
+      fail-fast: false
       matrix:
-        os: [windows-latest]
-        arch: [x86]
-
+        arch: [x86, x64]
+    env:
+      QT_QPA_PLATFORM: offscreen
+      TARGET_ARCH: ${{ matrix.arch }}
+      REF_TYPE: ${{ github.ref_type }}
+      REF_NAME: ${{ github.ref_name }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.11'
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-
-    - name: Run build script
-      if: runner.os == 'Windows'
-      run: .\build-win.bat
-
-    - name: Archive Release Asset
-      if: runner.os == 'Windows'
-      run: Compress-Archive -Path ./dist/EspAdc -DestinationPath ./dist/EspAdc_${{ runner.os }}_${{ matrix.arch }}.zip
-
-    - name: Upload Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: EspAdc_${{ runner.os }}_${{ matrix.arch }}
-        path: ./dist/EspAdc_${{ runner.os }}_${{ matrix.arch }}.zip
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: ${{ matrix.arch }}
+          cache: pip
+          cache-dependency-path: 'requirements*.txt'
+      - name: Validate and resolve build version
+        shell: pwsh
+        run: |
+          $version = python tools/ci_version.py
+          if ($LASTEXITCODE -ne 0) { throw 'Invalid release version' }
+          "RELEASE_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          python -c "import struct, os; assert ('x64' if struct.calcsize('P') == 8 else 'x86') == os.environ['TARGET_ARCH']"
+          if ($LASTEXITCODE -ne 0) { throw 'Incorrect Python architecture' }
+      - name: Install dependencies
+        run: |
+          python -m pip install --only-binary=:all: -r requirements.txt
+      - name: Tests
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Build portable application and updater
+        shell: pwsh
+        run: |
+          python tools/build_windows.py --version "$env:RELEASE_VERSION" --arch "$env:TARGET_ARCH"
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
+      - name: Smoke test the packaged application
+        shell: pwsh
+        run: |
+          $env:ESP_ADC_SMOKE_TEST = '1'
+          $env:ESP_ADC_EXPECTED_VERSION = $env:RELEASE_VERSION
+          $env:ESP_ADC_EXPECTED_ARCH = $env:TARGET_ARCH
+          $exe = (Resolve-Path './dist/EspAdc/EspAdc.exe').Path
+          $process = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
+          if (-not $process.WaitForExit(60000)) { $process.Kill(); throw 'Packaged app timed out' }
+          if ($process.ExitCode -ne 0) { throw "Packaged app failed: $($process.ExitCode)" }
+          $helper = Start-Process -FilePath (Resolve-Path './dist/EspAdc/updater.exe').Path -ArgumentList '--help' -PassThru
+          if (-not $helper.WaitForExit(30000)) { $helper.Kill(); throw 'Updater timed out' }
+          if ($helper.ExitCode -ne 0) { throw 'Updater failed to start' }
+      - name: Exercise the packaged updater
+        run: python tools/smoke_update_windows.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: EspAdc_Windows_${{ matrix.arch }}_${{ env.RELEASE_VERSION }}
+          path: |
+            dist/EspAdc_Windows_${{ matrix.arch }}_${{ env.RELEASE_VERSION }}.zip
+            dist/EspAdc_Windows_${{ matrix.arch }}_${{ env.RELEASE_VERSION }}.zip.sha256
+          if-no-files-found: error
 
   release:
+    if: github.ref_type == 'tag' && github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
-
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Download Artifacts
-      uses: actions/download-artifact@v4
-      with:
-        name: EspAdc_Windows_x86
-
-    - name: List contents
-      run: ls -l .
-      shell: bash
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v2
-      if: startsWith(github.ref, 'refs/tags/')
-      with:
-        files: EspAdc_Windows_x86.zip
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: EspAdc_Windows_*_${{ github.ref_name }}
+          merge-multiple: true
+          path: release-assets
+      - name: Publish both verified architectures together
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          for arch in x86 x64; do
+            file="EspAdc_Windows_${arch}_${RELEASE_TAG}.zip"
+            test -s "$file"
+            sha256sum --check "$file.sha256"
+          done
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json 2>/dev/null; then
+            python -c 'import json; assert json.load(open("release-state.json"))["isDraft"], "Release is already published; use a new version tag"'
+          else
+            extra=()
+            if [[ "$RELEASE_TAG" == *-* ]]; then extra+=(--prerelease); fi
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "ESP ADC $RELEASE_TAG" --generate-notes "${extra[@]}"
+          fi
+          gh release upload "$RELEASE_TAG" EspAdc_Windows_*.zip EspAdc_Windows_*.zip.sha256 --clobber
+          gh release edit "$RELEASE_TAG" --draft=false
