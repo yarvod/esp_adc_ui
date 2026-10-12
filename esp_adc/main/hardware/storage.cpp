@@ -1,5 +1,6 @@
 #include "hardware/storage.h"
 #include "board_config.h"
+#include "ds1302.h"
 #include "driver/sdspi_host.h"
 #include "driver/spi_common.h"
 #include "esp_vfs_fat.h"
@@ -109,7 +110,11 @@ daq::Result Storage::append(const std::string &filename, const daq::Sample *samp
     bool ok = true;
     for (size_t i = 0; i < count && ok; ++i) {
         const auto &sample = samples[i];
-        ok = fprintf(file, "%llu; %.1f; %.1f; %.1f\n", static_cast<unsigned long long>(sample.timestamp_ms),
+        // Format the measurement's UTC time, not the time this batch reaches the SD card.
+        const auto date = rtc::calendar(sample.timestamp_ms / 1000);
+        ok = fprintf(file, "%04d-%02d-%02d %02d:%02d:%02d.%03d; %.1f; %.1f; %.1f\n",
+                     date.year, date.month, date.day, date.hour, date.minute, date.second,
+                     static_cast<int>(sample.timestamp_ms % 1000),
                      sample.millivolts[0], sample.millivolts[1], sample.millivolts[2]) > 0;
     }
     if (fflush(file) != 0) ok = false;
